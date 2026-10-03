@@ -79,3 +79,20 @@ Registered MCP Tools:
 - `query_and_analyze_database(user_input: str)`: Analyzes database, executes generated SQL, exports CSV, and returns structured response (`response`, `metadata.table`, `metadata.code`).
 - `execute_sql_to_csv(query: str, filename: str)`: Executes raw SQL and exports to CSV.
 - `get_database_schema()`: Returns tables and full schema summary.
+
+### 5. Run Web UI (NiceGUI)
+
+Launch the interactive split-view UI featuring natural language chat and real-time query result table widget:
+
+```bash
+# Run as Compose service
+docker compose up ui
+
+# Or in detached mode in background
+docker compose up -d ui
+
+# Or run locally (virtual environment)
+python -m ui.app
+```
+
+Then open `http://localhost:8080` in your web browser.

@@ -21,8 +21,11 @@ dependencies = [
     "langchain-core>=0.3.0",
     "langchain-google-genai>=2.0.0",
     "langgraph>=0.2.0",
+    "nicegui>=2.0.0",
+    "pandas>=2.0.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["shared*", "agents*"]
+include = ["shared*", "agents*", "ui*"]
+

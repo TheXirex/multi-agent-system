@@ -12,6 +12,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml README.md ./
 COPY shared/ ./shared/
 COPY agents/ ./agents/
+COPY ui/ ./ui/
 
 RUN uv venv /app/.venv && uv pip install --no-cache -e .
 

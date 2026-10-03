@@ -85,6 +85,7 @@ class DBAgent:
             "file_name": tool_result.get("file_name", ""),
             "row_count": tool_result.get("row_count", 0),
             "columns": tool_result.get("columns", []),
+            "preview": tool_result.get("preview", []),
         }
 
         code_metadata = {
