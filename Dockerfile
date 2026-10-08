@@ -22,4 +22,4 @@ ENV CSV_OUTPUT_DIR=/app/output
 
 RUN mkdir -p /app/output
 
-CMD ["python", "-m", "agents.db_agent.main"]
+CMD ["python", "-m", "agents.api"]

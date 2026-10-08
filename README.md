@@ -6,9 +6,13 @@ A modular multi-agent platform featuring shared LLM integrations and domain-spec
 
 - **`pyproject.toml`**: Root-level project configuration and dependency management.
 - **`shared/`**: Common package containing the LLM interface and factory (`LLMFactory`, `GeminiLLM`, `BaseLLM`).
-- **`agents/db_agent/`**: Database agent built on **LangChain** and **LangGraph** (`StateGraph`) that inspects PostgreSQL schema, generates SQL queries, executes them, and exports results to CSV via an extensible tool registry.
+- **`agents/orchestrator/`**: Orchestrator Agent acting as an **MCP Client**. Implements the pipeline:
+  - **`Planner`**: Discovers available tools from registered MCP servers and formulates a structured execution plan.
+  - **`Executor`**: Calls tools via MCP (`db_agent` and future domain agents) and aggregates raw results and metadata.
+  - **`Finalizer`**: Synthesizes the raw data into a natural user response while preserving table and SQL metadata.
+- **`agents/db_agent/`**: Database agent built on **LangChain** and **LangGraph** (`StateGraph`) that inspects PostgreSQL schema, generates SQL queries, executes them, and exports results to CSV via an extensible tool registry. Exposes tools through MCP via `mcp_server.py`.
 - **`docker/postgres/init.sql`**: PostgreSQL initialization script with sample e-commerce data.
-- **`docker-compose.yml`**: Compose configuration orchestrating the PostgreSQL database and `db-agent`.
+- **`docker-compose.yml`**: Compose configuration orchestrating PostgreSQL, `db-agent`, and `ui`.
 - **`output/`**: Directory where generated CSV files are saved.
 
 ## Environment & Dependency Management (`uv`)
@@ -47,27 +51,40 @@ LLM_API_KEY=your_actual_api_key
 
 ### 2. Run with Docker Compose
 
+Start all services (`postgres`, `ai` backend with all agents, and `ui` frontend):
+
 ```bash
-# Start Postgres in background
-docker compose up -d postgres
+# Using make.bat (Windows):
+make up
 
-# Build DB Agent image
-docker compose build db-agent
-
-# Run DB Agent interactively
-docker compose run --rm db-agent
-
-# Or run a single query directly
-docker compose run --rm db-agent python -m agents.db_agent.main --query "Find top 3 customers by total order amount"
+# Or directly with Docker Compose:
+docker compose up --build
 ```
 
-### 3. Local Run (CLI)
+Services:
+- **`postgres`**: Database on `localhost:5432`
+- **`ai`**: Central AI service (FastAPI) on `localhost:8000` (`http://localhost:8000/api/query`, `http://localhost:8000/health`)
+- **`ui`**: Frontend Web UI on `http://localhost:8080`
+
+### 3. Run Multi-Agent Orchestrator (CLI)
+
+The Orchestrator agent connects as an MCP Client to domain agents (discovering tools, planning execution, executing tool calls, and finalizing results):
+
+```bash
+# Run a natural language query via Orchestrator
+python -m agents.orchestrator.main --query "Find top 3 customers by total order amount"
+
+# Or run interactively
+python -m agents.orchestrator.main
+```
+
+### 4. Direct DB Agent Run (CLI)
 
 ```bash
 python -m agents.db_agent.main --query "Show all completed orders"
 ```
 
-### 4. Run as MCP Server
+### 5. Run as MCP Server
 
 To expose the agent and its tools via the Model Context Protocol (STDIO transport):
 

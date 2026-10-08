@@ -18,36 +18,13 @@ services:
       timeout: 5s
       retries: 5
 
-  db-agent:
+  ai:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: db-agent
-    environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: app_db
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
-      LLM_MODEL: ${LLM_MODEL:-gemini-3.5-flash-lite}
-      LLM_API_KEY: ${LLM_API_KEY}
-      CSV_OUTPUT_DIR: /app/output
-    volumes:
-      - ./output:/app/output
-    depends_on:
-      postgres:
-        condition: service_healthy
-    stdin_open: true
-    tty: true
-
-  ui:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: db-agent-ui
+    container_name: ai-service
     restart: unless-stopped
-    command: ["python", "-m", "ui.app"]
+    command: ["python", "-m", "agents.api"]
     environment:
       DB_HOST: postgres
       DB_PORT: 5432
@@ -59,12 +36,29 @@ services:
       LLM_API_KEY: ${LLM_API_KEY}
       CSV_OUTPUT_DIR: /app/output
     ports:
-      - "8080:8080"
+      - "8000:8000"
     volumes:
       - ./output:/app/output
     depends_on:
       postgres:
         condition: service_healthy
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-ui
+    restart: unless-stopped
+    command: ["python", "-m", "ui.app"]
+    environment:
+      AI_SERVICE_URL: http://ai:8000
+      CSV_OUTPUT_DIR: /app/output
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./output:/app/output
+    depends_on:
+      - ai
 
 volumes:
   pgdata:

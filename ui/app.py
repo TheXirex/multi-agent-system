@@ -7,10 +7,10 @@ from nicegui import app, run, ui
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-from agents.db_agent.agent import DBAgent
-from agents.db_agent.factory import build_agent
-from agents.db_agent.config import get_settings
+import httpx
 
+# AI Service endpoint configuration
+AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
 
 # Configure static output directory to allow direct CSV downloads
 OUTPUT_DIR = Path("./output").resolve()
@@ -20,24 +20,28 @@ app.add_static_files("/output", str(OUTPUT_DIR))
 
 class DBStudioUI:
     def __init__(self) -> None:
-        self.agent: Optional[DBAgent] = None
+        self.ai_service_url: str = AI_SERVICE_URL.rstrip("/")
         self.current_csv_path: Optional[str] = None
         self.current_csv_name: Optional[str] = None
         self.is_busy: bool = False
 
-    def get_or_create_agent(self) -> DBAgent:
+    async def send_query(self, query_text: str) -> Dict[str, Any]:
         """
-        Retrieves or initializes the DBAgent instance.
+        Sends natural language query to the AI service endpoint.
 
         Args:
-            None
+            query_text (str): User request.
 
         Returns:
-            DBAgent: Configured database agent instance.
+            Dict[str, Any]: Response from the AI service.
         """
-        if self.agent is None:
-            self.agent = build_agent()
-        return self.agent
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                f"{self.ai_service_url}/api/query",
+                json={"query": query_text},
+            )
+            resp.raise_for_status()
+            return resp.json()
 
     def load_table_from_metadata(self, table_meta: Dict[str, Any]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
@@ -102,7 +106,6 @@ def create_ui() -> None:
         None
     """
     studio = DBStudioUI()
-    settings = get_settings()
 
     # Enable dark mode by default
     dark = ui.dark_mode(value=True)
@@ -110,14 +113,13 @@ def create_ui() -> None:
     # Top Navigation Header
     with ui.header().classes("w-full bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between shadow-md"):
         with ui.row().classes("items-center gap-3"):
-            ui.icon("database", size="2rem").classes("text-indigo-400")
+            ui.icon("hub", size="2rem").classes("text-indigo-400")
             with ui.column().classes("gap-0"):
-                ui.label("Database Agent Studio").classes("text-lg font-bold text-slate-100 tracking-wide")
-                ui.label("LangGraph Agent + PostgreSQL + NiceGUI").classes("text-xs text-slate-400")
+                ui.label("Multi-Agent Orchestrator Studio").classes("text-lg font-bold text-slate-100 tracking-wide")
+                ui.label("Planner → MCP Executor (db_agent) → Finalizer").classes("text-xs text-slate-400")
 
         with ui.row().classes("items-center gap-3"):
-            ui.badge(f"Model: {settings.llm_model}", color="slate-800").props("outline").classes("text-xs text-indigo-300 font-mono")
-            ui.badge(f"DB: {settings.db_name}", color="emerald-900").classes("text-xs text-emerald-300 font-mono")
+            ui.badge(f"AI Backend: {studio.ai_service_url}", color="slate-800").props("outline").classes("text-xs text-indigo-300 font-mono")
 
             ui.button(
                 icon="dark_mode",
@@ -136,7 +138,7 @@ def create_ui() -> None:
                 with ui.row().classes("items-center gap-2"):
                     ui.icon("chat", size="1.2rem").classes("text-indigo-400")
                     ui.label("Agent Conversation").classes("font-semibold text-slate-200 text-sm")
-                ui.badge("Direct DB Agent", color="indigo-950").classes("text-indigo-300 text-xs")
+                ui.badge("MCP Client Orchestrator", color="indigo-950").classes("text-indigo-300 text-xs")
 
             # Chat Messages Scroll Area
             chat_scroll = ui.scroll_area().classes("flex-1 p-5 space-y-4 overflow-y-auto")
@@ -147,13 +149,14 @@ def create_ui() -> None:
                 with messages_container:
                     with ui.card().classes("w-full bg-slate-800/70 border border-slate-700/60 rounded-lg p-4"):
                         with ui.row().classes("items-center gap-2 mb-2"):
-                            ui.avatar("smart_toy", color="indigo-600", text_color="white", size="sm")
-                            ui.label("DB Agent").classes("font-semibold text-xs text-indigo-300")
+                            ui.avatar("hub", color="indigo-600", text_color="white", size="sm")
+                            ui.label("Orchestrator").classes("font-semibold text-xs text-indigo-300")
                             ui.label("System").classes("text-[10px] text-slate-400")
                         ui.markdown(
-                            "Hello! I am your **PostgreSQL Database Agent**. "
-                            "Ask me any question in English, and I will inspect the database schema, "
-                            "generate and execute the SQL query, and display the result table right here on the right widget."
+                            "Hello! I am your **Multi-Agent Orchestrator** (MCP Client). "
+                            "When you ask a question, the **Planner** determines the sequence of tools to call, "
+                            "the **Executor** runs them via MCP on connected agents (like **DB Agent**), "
+                            "and the **Finalizer** synthesizes the final answer and table results."
                         ).classes("text-sm text-slate-200 leading-relaxed")
 
             # Quick Query Chips
@@ -262,34 +265,52 @@ def create_ui() -> None:
             with thinking_card:
                 with ui.row().classes("items-center gap-3"):
                     ui.spinner("dots", size="sm", color="indigo-400")
-                    ui.label("Inspecting schema & running SQL...").classes("text-xs text-slate-400 italic")
+                    ui.label("Planner formulating steps & calling MCP tools...").classes("text-xs text-slate-400 italic")
 
         chat_scroll.scroll_to(percent=1.0)
 
         try:
-            # 3. Execute DBAgent in Background Worker
-            agent = studio.get_or_create_agent()
-            result = await run.io_bound(agent.query_database_and_analyze, query_text)
+            # 3. Call AI Service Endpoint
+            result = await studio.send_query(query_text)
 
             # Remove thinking indicator
             thinking_card.delete()
 
             response_text = result.get("response", "Query completed.")
-            metadata = result.get("metadata", {})
-            table_meta = metadata.get("table", {})
-            code_meta = metadata.get("code", {})
+            metadata = result.get("metadata") or {}
+            table_meta = metadata.get("table") or {}
+            code_meta = metadata.get("code") or {}
             sql_query = code_meta.get("query", "")
+            plan = result.get("plan") or {}
+            steps = plan.get("steps", []) if isinstance(plan, dict) else []
+            thought = plan.get("thought", "") if isinstance(plan, dict) else ""
 
-            # 4. Render Assistant Message with Explanation, SQL Code, and Metadata
+            # 4. Render Assistant Message with Plan, Tool Calls, Final Response, and SQL
             with messages_container:
                 with ui.card().classes("w-full bg-slate-800/70 border border-slate-700/60 rounded-lg p-4 space-y-3"):
                     with ui.row().classes("items-center justify-between w-full"):
                         with ui.row().classes("items-center gap-2"):
-                            ui.avatar("smart_toy", color="indigo-600", text_color="white", size="xs")
-                            ui.label("DB Agent").classes("font-semibold text-xs text-indigo-300")
+                            ui.avatar("hub", color="indigo-600", text_color="white", size="xs")
+                            ui.label("Orchestrator").classes("font-semibold text-xs text-indigo-300")
                         if table_meta.get("file_name"):
                             ui.badge(f"Export: {table_meta['file_name']}", color="slate-900").classes("text-[10px] text-slate-400 font-mono")
 
+                    # Display Planner Steps & MCP Tool Calling Trace
+                    if steps:
+                        with ui.expansion("Plan & MCP Execution Trace", icon="account_tree").props("dense default-opened=false").classes("w-full bg-slate-900/60 border border-slate-800/80 rounded-md text-xs text-slate-300"):
+                            if thought:
+                                ui.label(f"Strategy: {thought}").classes("text-[11px] text-slate-400 mb-2 italic")
+                            for s in steps:
+                                with ui.row().classes("items-center gap-2 my-1"):
+                                    step_id = s.get("step_id", "")
+                                    tool_name = s.get("tool_name", "")
+                                    desc = s.get("description", "")
+                                    ui.badge(f"Step {step_id}", color="indigo-900").classes("text-[10px] text-indigo-200")
+                                    ui.label(f"{tool_name}").classes("font-mono text-xs text-emerald-400")
+                                    if desc:
+                                        ui.label(f"({desc})").classes("text-[11px] text-slate-400")
+
+                    # Finalizer Synthesized Response
                     ui.markdown(response_text).classes("text-sm text-slate-200 leading-relaxed")
 
                     if sql_query:
