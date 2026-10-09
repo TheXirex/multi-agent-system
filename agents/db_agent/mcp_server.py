@@ -5,8 +5,7 @@ try:
 except ImportError:
     from mcp.server.fastmcp import FastMCP as MCPServer
 
-from agents.db_agent.agent import DBAgent
-from agents.db_agent.factory import build_agent
+from agents.db_agent.agent import DBAgent, build_agent
 
 
 def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:

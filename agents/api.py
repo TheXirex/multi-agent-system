@@ -8,9 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from agents.orchestrator.agent import OrchestratorAgent
-from agents.orchestrator.factory import build_orchestrator
-from agents.orchestrator.models import FinalOrchestratorResult
+from agents.orchestrator import FinalOrchestratorResult, OrchestratorAgent, build_orchestrator
 
 logger = logging.getLogger("ai_service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -96,7 +94,7 @@ async def list_tools() -> Dict[str, Any]:
 async def query_endpoint(request: QueryRequest) -> QueryResponse:
     """
     Primary endpoint for natural language queries:
-    Runs Planner -> Executor (via MCP) -> Finalizer and returns response with metadata.
+    Runs Orchestrator agent to process natural language query and returns response with metadata.
     """
     global _orchestrator
     if not request.query.strip():

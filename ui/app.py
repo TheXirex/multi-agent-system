@@ -107,24 +107,14 @@ def create_ui() -> None:
     """
     studio = DBStudioUI()
 
-    # Enable dark mode by default
-    dark = ui.dark_mode(value=True)
+    # Enable dark mode
+    ui.dark_mode(value=True)
 
     # Top Navigation Header
     with ui.header().classes("w-full bg-slate-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between shadow-md"):
         with ui.row().classes("items-center gap-3"):
-            ui.icon("hub", size="2rem").classes("text-indigo-400")
-            with ui.column().classes("gap-0"):
-                ui.label("Multi-Agent Orchestrator Studio").classes("text-lg font-bold text-slate-100 tracking-wide")
-                ui.label("Planner → MCP Executor (db_agent) → Finalizer").classes("text-xs text-slate-400")
-
-        with ui.row().classes("items-center gap-3"):
-            ui.badge(f"AI Backend: {studio.ai_service_url}", color="slate-800").props("outline").classes("text-xs text-indigo-300 font-mono")
-
-            ui.button(
-                icon="dark_mode",
-                on_click=lambda: dark.toggle(),
-            ).props("flat round dense color=white").tooltip("Toggle dark/light mode")
+            ui.icon("hub", size="1.8rem").classes("text-indigo-400")
+            ui.label("Multi-Agent System").classes("text-lg font-bold text-slate-100 tracking-wide")
 
     # Main Split Workspace
     with ui.element("main").classes("w-full px-6 py-4 grid grid-cols-1 lg:grid-cols-12 gap-6 h-[calc(100vh-80px)]"):
@@ -137,8 +127,7 @@ def create_ui() -> None:
             with ui.row().classes("w-full px-5 py-3 border-b border-slate-800 items-center justify-between bg-slate-900/90"):
                 with ui.row().classes("items-center gap-2"):
                     ui.icon("chat", size="1.2rem").classes("text-indigo-400")
-                    ui.label("Agent Conversation").classes("font-semibold text-slate-200 text-sm")
-                ui.badge("MCP Client Orchestrator", color="indigo-950").classes("text-indigo-300 text-xs")
+                    ui.label("Chat").classes("font-semibold text-slate-200 text-sm")
 
             # Chat Messages Scroll Area
             chat_scroll = ui.scroll_area().classes("flex-1 p-5 space-y-4 overflow-y-auto")
@@ -149,14 +138,12 @@ def create_ui() -> None:
                 with messages_container:
                     with ui.card().classes("w-full bg-slate-800/70 border border-slate-700/60 rounded-lg p-4"):
                         with ui.row().classes("items-center gap-2 mb-2"):
-                            ui.avatar("hub", color="indigo-600", text_color="white", size="sm")
+                            ui.avatar("smart_toy", color="indigo-600", text_color="white", size="sm")
                             ui.label("Orchestrator").classes("font-semibold text-xs text-indigo-300")
-                            ui.label("System").classes("text-[10px] text-slate-400")
                         ui.markdown(
-                            "Hello! I am your **Multi-Agent Orchestrator** (MCP Client). "
-                            "When you ask a question, the **Planner** determines the sequence of tools to call, "
-                            "the **Executor** runs them via MCP on connected agents (like **DB Agent**), "
-                            "and the **Finalizer** synthesizes the final answer and table results."
+                            "Hello! I am your **Orchestrator Agent**. "
+                            "Ask me any question or request data analysis. I can directly answer conversational questions "
+                            "or query the database and display results in the table widget."
                         ).classes("text-sm text-slate-200 leading-relaxed")
 
             # Quick Query Chips
@@ -265,7 +252,7 @@ def create_ui() -> None:
             with thinking_card:
                 with ui.row().classes("items-center gap-3"):
                     ui.spinner("dots", size="sm", color="indigo-400")
-                    ui.label("Planner formulating steps & calling MCP tools...").classes("text-xs text-slate-400 italic")
+                    ui.label("Thinking...").classes("text-xs text-slate-400 italic")
 
         chat_scroll.scroll_to(percent=1.0)
 
@@ -281,36 +268,17 @@ def create_ui() -> None:
             table_meta = metadata.get("table") or {}
             code_meta = metadata.get("code") or {}
             sql_query = code_meta.get("query", "")
-            plan = result.get("plan") or {}
-            steps = plan.get("steps", []) if isinstance(plan, dict) else []
-            thought = plan.get("thought", "") if isinstance(plan, dict) else ""
 
-            # 4. Render Assistant Message with Plan, Tool Calls, Final Response, and SQL
+            # 4. Render Assistant Message
             with messages_container:
                 with ui.card().classes("w-full bg-slate-800/70 border border-slate-700/60 rounded-lg p-4 space-y-3"):
                     with ui.row().classes("items-center justify-between w-full"):
                         with ui.row().classes("items-center gap-2"):
-                            ui.avatar("hub", color="indigo-600", text_color="white", size="xs")
+                            ui.avatar("smart_toy", color="indigo-600", text_color="white", size="xs")
                             ui.label("Orchestrator").classes("font-semibold text-xs text-indigo-300")
                         if table_meta.get("file_name"):
                             ui.badge(f"Export: {table_meta['file_name']}", color="slate-900").classes("text-[10px] text-slate-400 font-mono")
 
-                    # Display Planner Steps & MCP Tool Calling Trace
-                    if steps:
-                        with ui.expansion("Plan & MCP Execution Trace", icon="account_tree").props("dense default-opened=false").classes("w-full bg-slate-900/60 border border-slate-800/80 rounded-md text-xs text-slate-300"):
-                            if thought:
-                                ui.label(f"Strategy: {thought}").classes("text-[11px] text-slate-400 mb-2 italic")
-                            for s in steps:
-                                with ui.row().classes("items-center gap-2 my-1"):
-                                    step_id = s.get("step_id", "")
-                                    tool_name = s.get("tool_name", "")
-                                    desc = s.get("description", "")
-                                    ui.badge(f"Step {step_id}", color="indigo-900").classes("text-[10px] text-indigo-200")
-                                    ui.label(f"{tool_name}").classes("font-mono text-xs text-emerald-400")
-                                    if desc:
-                                        ui.label(f"({desc})").classes("text-[11px] text-slate-400")
-
-                    # Finalizer Synthesized Response
                     ui.markdown(response_text).classes("text-sm text-slate-200 leading-relaxed")
 
                     if sql_query:

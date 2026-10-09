@@ -6,9 +6,12 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from agents.db_agent.db.inspector import DatabaseInspector
-from agents.db_agent.tools.registry import ToolRegistry
+from agents.db_agent.config import Settings, get_settings
+from agents.db_agent.db import DatabaseInspector, create_db_engine
+from agents.db_agent.prompts import prompt_loader
+from agents.db_agent.tools import ExecuteSQLAndExportCSVTool, ToolRegistry
 from shared.llm.base import BaseLLM, extract_text_from_message_content
+from shared.llm.factory import LLMFactory
 
 
 
@@ -164,11 +167,7 @@ class DBAgent:
                 "Please fix the SQL query to resolve this error."
             )
 
-        system_prompt = (
-            "You are an expert PostgreSQL database analyst. "
-            "Write a valid PostgreSQL query to answer the user request based on the provided schema.\n"
-            "Return ONLY the SQL query without any Markdown formatting, explanations, or quotes."
-        )
+        system_prompt = prompt_loader.render("sql_generation")
 
         user_content = (
             f"Database Schema:\n{state['schema']}\n\n"
@@ -223,10 +222,7 @@ class DBAgent:
         columns = tool_result.get("columns", [])
         row_count = tool_result.get("row_count", 0)
 
-        system_prompt = (
-            "You are a helpful data analyst. Analyze the executed SQL query and exported dataset, "
-            "and provide a concise, informative response explaining the findings to the user."
-        )
+        system_prompt = prompt_loader.render("analysis")
 
         user_content = (
             f"User Request: {state['user_input']}\n"
@@ -276,3 +272,35 @@ class DBAgent:
         if cleaned.lower().startswith("sql"):
             cleaned = cleaned[3:].strip()
         return cleaned
+
+
+def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
+    """
+    Constructs and configures DBAgent with database connectivity, tools, and LLM.
+
+    Args:
+        settings (Optional[Settings]): Optional custom DB agent settings.
+
+    Returns:
+        DBAgent: Initialized DBAgent ready to process database requests.
+    """
+    cfg = settings or get_settings()
+
+    engine = create_db_engine(cfg.database_url)
+    inspector = DatabaseInspector(engine)
+
+    registry = ToolRegistry()
+    sql_tool = ExecuteSQLAndExportCSVTool(engine=engine, output_dir=cfg.csv_output_dir)
+    registry.register(sql_tool)
+
+    active_llm = LLMFactory.create(
+        provider=cfg.llm_provider,
+        api_key=cfg.llm_api_key or None,
+        model_name=cfg.llm_model,
+    )
+
+    return DBAgent(llm=active_llm, inspector=inspector, tools=registry)
+
+
+build_agent = create_db_agent
+

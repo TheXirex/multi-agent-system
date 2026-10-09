@@ -6,13 +6,10 @@ A modular multi-agent platform featuring shared LLM integrations and domain-spec
 
 - **`pyproject.toml`**: Root-level project configuration and dependency management.
 - **`shared/`**: Common package containing the LLM interface and factory (`LLMFactory`, `GeminiLLM`, `BaseLLM`).
-- **`agents/orchestrator/`**: Orchestrator Agent acting as an **MCP Client**. Implements the pipeline:
-  - **`Planner`**: Discovers available tools from registered MCP servers and formulates a structured execution plan.
-  - **`Executor`**: Calls tools via MCP (`db_agent` and future domain agents) and aggregates raw results and metadata.
-  - **`Finalizer`**: Synthesizes the raw data into a natural user response while preserving table and SQL metadata.
+- **`agents/orchestrator/`**: Central Orchestrator Agent acting as an **MCP Client**. Directly answers conversational requests and coordinates specialized tool execution across domain agents via MCP, preserving structured metadata (CSV tables and SQL queries).
 - **`agents/db_agent/`**: Database agent built on **LangChain** and **LangGraph** (`StateGraph`) that inspects PostgreSQL schema, generates SQL queries, executes them, and exports results to CSV via an extensible tool registry. Exposes tools through MCP via `mcp_server.py`.
 - **`docker/postgres/init.sql`**: PostgreSQL initialization script with sample e-commerce data.
-- **`docker-compose.yml`**: Compose configuration orchestrating PostgreSQL, `db-agent`, and `ui`.
+- **`docker-compose.yml`**: Compose configuration orchestrating PostgreSQL (`postgres-db`), AI Orchestrator service (`ai-service`), and NiceGUI split-view UI (`frontend`).
 - **`output/`**: Directory where generated CSV files are saved.
 
 ## Environment & Dependency Management (`uv`)
@@ -66,22 +63,20 @@ Services:
 - **`ai`**: Central AI service (FastAPI) on `localhost:8000` (`http://localhost:8000/api/query`, `http://localhost:8000/health`)
 - **`ui`**: Frontend Web UI on `http://localhost:8080`
 
-### 3. Run Multi-Agent Orchestrator (CLI)
+### 3. Run AI Service (FastAPI)
 
-The Orchestrator agent connects as an MCP Client to domain agents (discovering tools, planning execution, executing tool calls, and finalizing results):
+Run the backend AI service exposing the Orchestrator over HTTP:
 
 ```bash
-# Run a natural language query via Orchestrator
-python -m agents.orchestrator.main --query "Find top 3 customers by total order amount"
-
-# Or run interactively
-python -m agents.orchestrator.main
+python -m agents.api
 ```
 
-### 4. Direct DB Agent Run (CLI)
+Or query the endpoint directly:
 
 ```bash
-python -m agents.db_agent.main --query "Show all completed orders"
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "Find top 3 customers by total order amount"}'
 ```
 
 ### 5. Run as MCP Server
@@ -103,10 +98,10 @@ Launch the interactive split-view UI featuring natural language chat and real-ti
 
 ```bash
 # Run as Compose service
-docker compose up ui
+docker compose up frontend
 
 # Or in detached mode in background
-docker compose up -d ui
+docker compose up -d frontend
 
 # Or run locally (virtual environment)
 python -m ui.app

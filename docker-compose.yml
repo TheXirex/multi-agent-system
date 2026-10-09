@@ -43,11 +43,11 @@ services:
       postgres:
         condition: service_healthy
 
-  ui:
+  frontend:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-ui
+    container_name: frontend
     restart: unless-stopped
     command: ["python", "-m", "ui.app"]
     environment:
