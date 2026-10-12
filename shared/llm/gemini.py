@@ -1,11 +1,16 @@
+import logging
 import os
 from typing import Any, List, Optional
+import warnings
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from shared.llm.base import BaseLLM, extract_text_from_message_content
+
+logging.getLogger("google_genai.models").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", category=UserWarning, module="langchain_google_genai")
 
 
 class GeminiLLM(BaseLLM):

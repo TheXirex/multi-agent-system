@@ -35,7 +35,7 @@ class OrchestratorSettings(BaseSettings):
     llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")
     llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
-    csv_output_dir: Path = Path(os.getenv("CSV_OUTPUT_DIR", "./output"))
+
 
     # Default configured MCP servers (db_agent included by default; extensible for future agents)
     db_agent_module: str = os.getenv("DB_AGENT_MCP_MODULE", "agents.db_agent.mcp_server")

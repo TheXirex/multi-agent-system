@@ -1,6 +1,8 @@
 import csv
 from datetime import datetime
+import json
 from pathlib import Path
+import tempfile
 from typing import Any, Dict, List, Optional
 from sqlalchemy import Engine, text
 
@@ -9,13 +11,14 @@ from agents.db_agent.tools.base import BaseTool
 
 class ExecuteSQLAndExportCSVTool(BaseTool):
     """
-    Executes an SQL query against the database and exports the resulting rows to a CSV file.
+    Executes an SQL query against the database, records the dataset in PostgreSQL,
+    and returns its dataset ID.
     """
 
     name: str = "execute_sql_to_csv"
     description: str = (
-        "Executes a SQL query against the database and saves the result rows into a CSV file. "
-        "Use this tool when you need to run queries and export data for user inspection or analysis."
+        "Executes a SQL query against the database and saves the result dataset into the database. "
+        "Use this tool when you need to run queries and retrieve data for analysis or display."
     )
     parameters_schema: Dict[str, Any] = {
         "type": "object",
@@ -26,57 +29,89 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
             },
             "filename": {
                 "type": "string",
-                "description": "Optional custom filename for the output CSV file (without or with .csv extension).",
+                "description": "Optional name for the dataset.",
             },
         },
         "required": ["query"],
     }
 
-    def __init__(self, engine: Engine, output_dir: Path) -> None:
+    def __init__(self, engine: Engine, output_dir: Optional[Path] = None) -> None:
         self.engine = engine
-        self.output_dir = output_dir
+        self.output_dir = output_dir or (Path(tempfile.gettempdir()) / "app_temp")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _ensure_tracking_table(self, connection: Any) -> None:
+        """
+        Ensures the generated_datasets tracking table exists in the database.
+        """
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS generated_datasets (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL DEFAULT 'dataset',
+                file_name VARCHAR(255) DEFAULT '',
+                file_path TEXT DEFAULT '',
+                query TEXT,
+                row_count INTEGER DEFAULT 0,
+                columns TEXT[] DEFAULT '{}',
+                data JSONB NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
 
     def execute(self, query: str, filename: Optional[str] = None) -> Dict[str, Any]:
         """
-        Executes the provided SQL query and exports the dataset to a CSV file.
-
-        Args:
-            query (str): SQL query statement to be executed.
-            filename (Optional[str]): Optional custom file name for the target CSV file.
-
-        Returns:
-            Dict[str, Any]: Execution details including file path, row count, and column headers.
+        Executes the provided SQL query and records the resulting dataset into generated_datasets.
         """
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"query_result_{timestamp}.csv"
-        elif not filename.endswith(".csv"):
-            filename = f"{filename}.csv"
-
-        target_path = self.output_dir / filename
+            filename = f"query_result_{timestamp}"
+        name = filename.removesuffix(".csv")
 
         try:
-            with self.engine.connect() as connection:
+            dataset_id = None
+            with self.engine.begin() as connection:
+                self._ensure_tracking_table(connection)
                 result = connection.execute(text(query))
                 columns = list(result.keys())
-                rows: List[List[Any]] = [list(row) for row in result.fetchall()]
+                raw_rows: List[List[Any]] = [list(row) for row in result.fetchall()]
 
-            with open(target_path, mode="w", newline="", encoding="utf-8") as csvfile:
-                writer = csv.writer(csvfile)
-                writer.writerow(columns)
-                writer.writerows(rows)
+                # Serialize rows for JSONB storage
+                rows_records = [
+                    {
+                        col: (str(val) if val is not None and not isinstance(val, (int, float, bool, str)) else val)
+                        for col, val in zip(columns, row)
+                    }
+                    for row in raw_rows
+                ]
+
+                record_res = connection.execute(
+                    text("""
+                        INSERT INTO generated_datasets (name, file_name, file_path, query, row_count, columns, data)
+                        VALUES (:name, :file_name, '', :query, :row_count, :columns, :data)
+                        RETURNING id
+                    """),
+                    {
+                        "name": name,
+                        "file_name": f"{name}.csv",
+                        "query": query,
+                        "row_count": len(raw_rows),
+                        "columns": columns,
+                        "data": json.dumps(rows_records, default=str),
+                    },
+                )
+                dataset_id = record_res.scalar()
 
             preview_rows = [
                 [str(val) if val is not None and not isinstance(val, (int, float, bool, str)) else val for val in row]
-                for row in rows[:5]
+                for row in raw_rows[:5]
             ]
 
             return {
                 "status": "success",
-                "file_path": str(target_path.resolve()),
-                "file_name": target_path.name,
-                "row_count": len(rows),
+                "dataset_id": dataset_id,
+                "name": name,
+                "file_name": f"{name}.csv",
+                "row_count": len(raw_rows),
                 "columns": columns,
                 "preview": preview_rows,
             }

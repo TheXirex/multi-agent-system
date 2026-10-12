@@ -188,16 +188,31 @@ class OrchestratorAgent:
         steps = state.get("steps", [])
         step_results: List[StepExecutionResult] = []
         raw_text_parts: List[str] = []
-        consolidated_metadata: Dict[str, Any] = {
-            "table": {},
-            "code": {},
-        }
+        consolidated_metadata: Dict[str, Any] = {}
+
+        last_dataset_id: Optional[int] = None
+        last_exported_csv: Optional[str] = None
 
         for step in steps:
             logger.info(f"Executing step {step.step_id}: {step.tool_name}")
+
+            # Dynamic argument resolution: inject previous step's dataset_id or CSV output if required
+            step_args = dict(step.arguments or {})
+            if "dataset_id" in step_args:
+                val = step_args.get("dataset_id")
+                if (val is None or val == "" or str(val).lower() in {"0", "latest", "{{dataset_id}}"}) and last_dataset_id:
+                    step_args["dataset_id"] = last_dataset_id
+            elif last_dataset_id and "dataset_id" not in step_args and step.tool_name == "run_ml_analysis":
+                step_args["dataset_id"] = last_dataset_id
+
+            if "dataset_path" in step_args:
+                val = str(step_args.get("dataset_path", "")).strip()
+                if (not val or val.lower() in {"", "latest", "{{csv}}", "{{previous_step_csv}}", "{{file_path}}"}) and last_exported_csv:
+                    step_args["dataset_path"] = last_exported_csv
+
             result = await session.call_tool(
                 tool_name=step.tool_name,
-                arguments=step.arguments,
+                arguments=step_args,
                 step_id=step.step_id,
             )
             step_results.append(result)
@@ -220,35 +235,40 @@ class OrchestratorAgent:
             if step_text:
                 raw_text_parts.append(step_text)
 
-            # Consolidate metadata
+            # Consolidate strictly ID-only metadata
             if result.metadata:
-                if "table" in result.metadata and result.metadata["table"]:
-                    consolidated_metadata["table"].update(result.metadata["table"])
-                if "code" in result.metadata and result.metadata["code"]:
-                    consolidated_metadata["code"].update(result.metadata["code"])
+                if "dataset_id" in result.metadata and result.metadata["dataset_id"]:
+                    last_dataset_id = result.metadata["dataset_id"]
+                    consolidated_metadata["dataset_id"] = result.metadata["dataset_id"]
+                if "chart_id" in result.metadata and result.metadata["chart_id"]:
+                    consolidated_metadata["chart_id"] = result.metadata["chart_id"]
+                if "chart_ids" in result.metadata and result.metadata["chart_ids"]:
+                    consolidated_metadata["chart_ids"] = result.metadata["chart_ids"]
+                if "script_id" in result.metadata and result.metadata["script_id"]:
+                    consolidated_metadata["script_id"] = result.metadata["script_id"]
 
-            # Extract table or code metadata from structured_data
-            if result.structured_data:
+            if result.structured_data and isinstance(result.structured_data, dict):
                 sd = result.structured_data
-                if "file_path" in sd:
-                    consolidated_metadata["table"].setdefault("file_path", sd.get("file_path", ""))
-                    consolidated_metadata["table"].setdefault("file_name", sd.get("file_name", ""))
-                    consolidated_metadata["table"].setdefault("row_count", sd.get("row_count", 0))
-                    consolidated_metadata["table"].setdefault("columns", sd.get("columns", []))
-                    consolidated_metadata["table"].setdefault("preview", sd.get("preview", []))
+                if "dataset_id" in sd and sd["dataset_id"]:
+                    last_dataset_id = sd["dataset_id"]
+                    consolidated_metadata.setdefault("dataset_id", sd["dataset_id"])
+                if "chart_id" in sd and sd["chart_id"]:
+                    consolidated_metadata.setdefault("chart_id", sd["chart_id"])
+                if "chart_ids" in sd and sd["chart_ids"]:
+                    consolidated_metadata.setdefault("chart_ids", sd["chart_ids"])
+                if "script_id" in sd and sd["script_id"]:
+                    consolidated_metadata.setdefault("script_id", sd["script_id"])
+                if "file_path" in sd and sd["file_path"]:
+                    last_exported_csv = sd["file_path"]
 
-                if "sql_query" in sd or "query" in sd:
-                    consolidated_metadata["code"].setdefault("language", "sql")
-                    consolidated_metadata["code"].setdefault("query", sd.get("sql_query") or sd.get("query", ""))
-
-        clean_metadata: Dict[str, Any] = {k: v for k, v in consolidated_metadata.items() if v}
         combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
 
         return {
             "execution_results": step_results,
             "raw_text": combined_raw,
-            "metadata": clean_metadata,
+            "metadata": consolidated_metadata,
         }
+
 
     async def _synthesize_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """

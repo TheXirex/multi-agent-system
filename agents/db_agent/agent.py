@@ -78,31 +78,19 @@ class DBAgent:
             user_input (str): Natural language instruction or analytical question.
 
         Returns:
-            Dict[str, Any]: Structured dictionary with response, table metadata (path, rows, cols), and SQL code.
+            Dict[str, Any]: Structured dictionary with response and ID-only metadata.
         """
         final_state = self.run(user_input)
         tool_result = final_state.get("tool_result") or {}
-
-        table_metadata = {
-            "file_path": tool_result.get("file_path", ""),
-            "file_name": tool_result.get("file_name", ""),
-            "row_count": tool_result.get("row_count", 0),
-            "columns": tool_result.get("columns", []),
-            "preview": tool_result.get("preview", []),
-        }
-
-        code_metadata = {
-            "language": "sql",
-            "query": final_state.get("sql_query", ""),
-        }
+        dataset_id = tool_result.get("dataset_id")
 
         return {
             "response": final_state.get("response", ""),
             "metadata": {
-                "table": table_metadata,
-                "code": code_metadata,
+                "dataset_id": dataset_id,
             },
         }
+
 
     def _build_graph(self) -> Any:
         """

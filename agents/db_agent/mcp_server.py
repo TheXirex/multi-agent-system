@@ -53,9 +53,17 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             filename (Optional[str]): Optional custom file name for the CSV export.
 
         Returns:
-            Dict[str, Any]: Result status, file path, row count, and column headers.
+            Dict[str, Any]: Result status, dataset ID, and ID-only metadata.
         """
-        return agent.tools.execute("execute_sql_to_csv", query=query, filename=filename)
+        result = agent.tools.execute("execute_sql_to_csv", query=query, filename=filename)
+        return {
+            "status": result.get("status"),
+            "dataset_id": result.get("dataset_id"),
+            "metadata": {
+                "dataset_id": result.get("dataset_id"),
+            },
+        }
+
 
     @server.tool(
         name="get_database_schema",

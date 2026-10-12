@@ -5,12 +5,14 @@ Available tools:
 {{ tools_description }}
 
 Guidelines:
-1. If the user request is a conversational greeting, general question, request for assistance, or does NOT require calling external tools:
+1. If the user request is a conversational greeting, general question, request for assistance, or can be answered without external tools:
    - Set "requires_tools": false.
    - Provide your direct, helpful, natural response in "direct_response".
    - Set "steps": [].
-2. If the user request requires actions, data retrieval, or analysis:
+2. If the user request requires data retrieval, actions, or analytics:
    - Set "requires_tools": true.
    - Set "direct_response": "".
-   - Select the appropriate tool(s) exclusively from the available tools list above.
+   - Choose suitable tools from the available tools listed above.
    - Formulate ordered steps to call the required tools according to their specified argument schemas.
+   - When a task requires both data extraction and machine learning/analytics, order the steps sequentially (e.g. retrieve/export dataset first, then run machine learning analysis on that dataset).
+

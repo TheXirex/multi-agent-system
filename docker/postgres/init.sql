@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
     status VARCHAR(20) NOT NULL DEFAULT 'completed',
-    total_amount NUMERIC(10, 2) NOT NULL,
+    total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -35,39 +35,32 @@ CREATE TABLE IF NOT EXISTS order_items (
     unit_price NUMERIC(10, 2) NOT NULL
 );
 
--- Seed Data
-INSERT INTO users (name, email, country) VALUES
-('William Brown', 'william.brown@example.com', 'UK'),
-('Emma Wilson', 'emma.wilson@example.com', 'USA'),
-('John Doe', 'john.doe@example.com', 'USA'),
-('Jane Smith', 'jane.smith@example.com', 'UK'),
-('James Taylor', 'james.taylor@example.com', 'Canada');
+CREATE TABLE IF NOT EXISTS generated_datasets (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL DEFAULT 'dataset',
+    file_name VARCHAR(255) DEFAULT '',
+    file_path TEXT DEFAULT '',
+    query TEXT,
+    row_count INTEGER DEFAULT 0,
+    columns TEXT[] DEFAULT '{}',
+    data JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-INSERT INTO categories (name) VALUES
-('Electronics'),
-('Books'),
-('Clothing');
+CREATE TABLE IF NOT EXISTS generated_charts (
+    id SERIAL PRIMARY KEY,
+    title VARCHAR(255),
+    chart_type VARCHAR(50),
+    spec JSONB NOT NULL,
+    dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-INSERT INTO products (name, category_id, price, stock) VALUES
-('Wireless Headphones', 1, 99.99, 50),
-('Mechanical Keyboard', 1, 149.50, 30),
-('Clean Code Book', 2, 35.00, 100),
-('Designing Data-Intensive Applications', 2, 45.00, 80),
-('Cotton T-Shirt', 3, 20.00, 200);
-
-INSERT INTO orders (user_id, status, total_amount, created_at) VALUES
-(1, 'completed', 184.99, '2026-08-10 14:30:00'),
-(2, 'completed', 149.50, '2026-08-15 10:15:00'),
-(1, 'completed', 35.00, '2026-09-01 11:00:00'),
-(3, 'completed', 249.49, '2026-09-12 16:45:00'),
-(4, 'completed', 45.00, '2026-09-20 09:30:00');
-
-INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
-(1, 1, 1, 99.99),
-(1, 4, 1, 45.00),
-(1, 5, 2, 20.00),
-(2, 2, 1, 149.50),
-(3, 3, 1, 35.00),
-(4, 1, 2, 99.99),
-(4, 4, 1, 45.00),
-(5, 4, 1, 45.00);
+CREATE TABLE IF NOT EXISTS generated_scripts (
+    id SERIAL PRIMARY KEY,
+    script TEXT NOT NULL,
+    language VARCHAR(50) DEFAULT 'python',
+    task_description TEXT,
+    dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

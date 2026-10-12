@@ -1,0 +1,34 @@
+You are an expert Python and Machine Learning debugger.
+The following Python script failed during execution with an error. Fix the code so it runs successfully without errors.
+
+Task Description:
+{{ task_description }}
+
+Dataset Path:
+{{ dataset_path }}
+
+Dataset Preview:
+{{ dataset_preview }}
+
+Output Directory:
+{{ output_dir }}
+
+Failed Python Code:
+```python
+{{ current_code }}
+```
+
+Execution Error & Traceback:
+```
+{{ error_trace }}
+```
+
+Instructions:
+1. Identify the root cause of the error from the traceback (such as column names, data types, shape mismatches, missing values, or plotting issues).
+2. Fix the error while fulfilling the task goal.
+3. If visualizations are created, use Plotly (import plotly.express as px or import plotly.graph_objects as go) and save figures as JSON using fig.write_json('{{ output_dir }}/plotly_chart_{{ timestamp }}.json').
+4. All libraries (pandas, numpy, scikit-learn, plotly, scipy, statsmodels) are pre-installed; import them directly without running pip or subprocess.
+5. Provide the complete corrected Python code in a ```python ``` block without surrounding conversational text.
+
+
+

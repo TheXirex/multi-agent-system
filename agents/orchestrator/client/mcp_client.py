@@ -36,6 +36,17 @@ class MCPClientManager:
             )
         )
 
+        # Register default ml_agent server
+        self.register_server(
+            MCPServerConfig(
+                name="ml_agent",
+                command=sys.executable,
+                args=["-m", "agents.ml_agent.mcp_server"],
+                env=dict(os.environ),
+                enabled=True,
+            )
+        )
+
         if servers:
             for s_name, s_cfg in servers.items():
                 self.register_server(s_cfg)
@@ -204,24 +215,13 @@ class ActiveMCPSession:
                             if "metadata" in parsed and isinstance(parsed["metadata"], dict):
                                 metadata.update(parsed["metadata"])
 
-                            # Extract table metadata directly if present at root
-                            if "file_path" in parsed or "columns" in parsed:
-                                table_meta = metadata.get("table", {})
-                                table_meta.setdefault("file_path", parsed.get("file_path", ""))
-                                table_meta.setdefault("file_name", parsed.get("file_name", ""))
-                                table_meta.setdefault("row_count", parsed.get("row_count", 0))
-                                table_meta.setdefault("columns", parsed.get("columns", []))
-                                table_meta.setdefault("preview", parsed.get("preview", []))
-                                metadata["table"] = table_meta
-
-                            if "sql_query" in parsed or "query" in parsed:
-                                code_meta = metadata.get("code", {})
-                                code_meta.setdefault("language", "sql")
-                                code_meta.setdefault("query", parsed.get("sql_query") or parsed.get("query"))
-                                metadata["code"] = code_meta
-
+                            # Directly capture ID keys if present at root
+                            for key in ("dataset_id", "chart_id", "chart_ids", "script_id"):
+                                if key in parsed:
+                                    metadata.setdefault(key, parsed[key])
                     except (json.JSONDecodeError, TypeError):
                         pass
+
 
             raw_combined = "\n".join(raw_text_parts)
 
