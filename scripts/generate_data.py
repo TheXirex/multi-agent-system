@@ -2,73 +2,12 @@ import argparse
 from datetime import datetime, timedelta
 import logging
 import os
-import random
 from typing import Optional
 
 from sqlalchemy import Engine, create_engine, text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("data_generator")
-
-FIRST_NAMES = [
-    "Alex", "Jordan", "Taylor", "Morgan", "Sam", "Chris", "Pat", "Robin", "William", "Emma",
-    "John", "Jane", "James", "Michael", "Emily", "Daniel", "Sophia", "David", "Olivia", "Lucas",
-    "Liam", "Noah", "Oliver", "Elijah", "Ava", "Isabella", "Mia", "Harper", "Evelyn", "Benjamin",
-]
-
-LAST_NAMES = [
-    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Anderson",
-    "Taylor", "Thomas", "Moore", "Jackson", "Martin", "Lee", "Perez", "Thompson", "White", "Harris",
-    "Clark", "Lewis", "Robinson", "Walker", "Young", "Allen", "King", "Wright", "Scott", "Torres",
-]
-
-COUNTRIES = [
-    "USA", "UK", "Canada", "Germany", "France", "Australia", "Japan", "Ukraine", "Poland", "Italy",
-]
-
-CATEGORIES = [
-    "Electronics",
-    "Books",
-    "Clothing",
-    "Home & Kitchen",
-    "Sports & Outdoors",
-    "Beauty & Health",
-]
-
-PRODUCTS = [
-    # Electronics (category_id 1)
-    ("Wireless Headphones", 1, 99.99, 150),
-    ("Mechanical Keyboard", 1, 149.50, 80),
-    ("Ultra-wide Monitor", 1, 399.00, 45),
-    ("USB-C Docking Station", 1, 79.99, 120),
-    ("Wireless Gaming Mouse", 1, 59.99, 200),
-    ("Noise Cancelling Earbuds", 1, 129.00, 90),
-    # Books (category_id 2)
-    ("Clean Code Book", 2, 35.00, 300),
-    ("Designing Data-Intensive Applications", 2, 45.00, 250),
-    ("Python Crash Course", 2, 29.99, 180),
-    ("Hands-On Machine Learning", 2, 55.00, 140),
-    ("Refactoring Book", 2, 42.50, 110),
-    # Clothing (category_id 3)
-    ("Cotton T-Shirt", 3, 20.00, 500),
-    ("Slim-Fit Jeans", 3, 49.99, 320),
-    ("Hooded Sweatshirt", 3, 39.99, 240),
-    ("Running Shoes", 3, 89.99, 175),
-    ("Wool Winter Coat", 3, 129.99, 85),
-    # Home & Kitchen (category_id 4)
-    ("Espresso Coffee Machine", 4, 199.99, 60),
-    ("Cast Iron Skillet", 4, 34.99, 190),
-    ("Smart LED Desk Lamp", 4, 45.00, 140),
-    ("Stainless Steel Water Bottle", 4, 19.99, 400),
-    # Sports & Outdoors (category_id 5)
-    ("Yoga Mat", 5, 25.00, 220),
-    ("Adjustable Dumbbells Set", 5, 119.99, 70),
-    ("Camping Backpack", 5, 79.99, 95),
-    ("Fitness Smartwatch", 5, 159.00, 110),
-    # Beauty & Health (category_id 6)
-    ("Vitamin C Serum", 6, 28.00, 310),
-    ("Hydrating Face Cream", 6, 22.50, 280),
-]
 
 
 def get_default_database_url() -> str:
@@ -86,17 +25,22 @@ def get_default_database_url() -> str:
 def seed_database(
     engine: Engine,
     reset: bool = False,
-    num_users: int = 120,
-    num_orders: int = 850,
+    num_users: int = 150,
+    num_orders: int = 900,
+    num_categories: int = 8,
+    num_products: int = 40,
 ) -> None:
     """
-    Populates PostgreSQL database with realistic synthetic data.
+    Populates PostgreSQL database with synthetic data using rules and increments
+    for categorical and text fields.
 
     Args:
         engine (Engine): SQLAlchemy database engine.
         reset (bool): If True, truncates existing domain tables first.
         num_users (int): Number of synthetic users to generate.
         num_orders (int): Number of synthetic orders to generate.
+        num_categories (int): Number of synthetic categories to generate.
+        num_products (int): Number of synthetic products to generate.
     """
     logger.info("Connecting to database for data generation...")
 
@@ -112,46 +56,42 @@ def seed_database(
             return
 
         # 1. Categories
-        logger.info(f"Seeding {len(CATEGORIES)} categories...")
-        for cat_name in CATEGORIES:
+        logger.info(f"Generating {num_categories} categories...")
+        for c in range(1, num_categories + 1):
             conn.execute(
                 text("INSERT INTO categories (name) VALUES (:name) ON CONFLICT DO NOTHING;"),
-                {"name": cat_name},
+                {"name": f"category_{c}"},
             )
 
         # 2. Products
-        logger.info(f"Seeding {len(PRODUCTS)} products...")
-        for p_name, p_cat, p_price, p_stock in PRODUCTS:
+        logger.info(f"Generating {num_products} products...")
+        product_prices = {}
+        for p in range(1, num_products + 1):
+            cat_id = ((p - 1) % num_categories) + 1
+            price = round(12.50 + ((p * 17.3) % 230.0), 2)
+            stock = 20 + ((p * 31) % 350)
             conn.execute(
                 text("""
                     INSERT INTO products (name, category_id, price, stock)
                     VALUES (:name, :category_id, :price, :stock)
                     ON CONFLICT DO NOTHING;
                 """),
-                {"name": p_name, "category_id": p_cat, "price": p_price, "stock": p_stock},
+                {"name": f"product_{p}", "category_id": cat_id, "price": price, "stock": stock},
             )
+            product_prices[p] = price
 
-        # Fetch product price mapping
-        product_rows = conn.execute(text("SELECT id, price FROM products;")).fetchall()
-        product_prices = {row[0]: float(row[1]) for row in product_rows}
         product_ids = list(product_prices.keys())
 
         # 3. Users
-        logger.info(f"Generating {num_users} realistic users...")
+        logger.info(f"Generating {num_users} users...")
         now = datetime.now()
-        used_emails = set()
         user_ids = []
-
         for i in range(1, num_users + 1):
-            first = random.choice(FIRST_NAMES)
-            last = random.choice(LAST_NAMES)
-            email_candidate = f"{first.lower()}.{last.lower()}{i}@example.com"
-            if email_candidate in used_emails:
-                email_candidate = f"{first.lower()}.{last.lower()}{i}_{random.randint(100, 999)}@example.com"
-            used_emails.add(email_candidate)
-
-            country = random.choice(COUNTRIES)
-            created_at = now - timedelta(days=random.randint(30, 700), hours=random.randint(0, 23))
+            domain_idx = ((i - 1) % 5) + 1
+            country_idx = ((i - 1) % 10) + 1
+            days_ago = (i * 7) % 650
+            hours_ago = (i * 3) % 24
+            created_at = now - timedelta(days=days_ago, hours=hours_ago)
 
             res = conn.execute(
                 text("""
@@ -160,9 +100,9 @@ def seed_database(
                     RETURNING id;
                 """),
                 {
-                    "name": f"{first} {last}",
-                    "email": email_candidate,
-                    "country": country,
+                    "name": f"user_{i}",
+                    "email": f"user_{i}@domain_{domain_idx}.net",
+                    "country": f"country_{country_idx}",
                     "created_at": created_at,
                 },
             )
@@ -171,12 +111,13 @@ def seed_database(
         # 4. Orders
         logger.info(f"Generating {num_orders} orders...")
         order_ids = []
-        statuses = ["completed", "completed", "completed", "completed", "completed", "processing", "cancelled"]
-
-        for _ in range(num_orders):
-            u_id = random.choice(user_ids)
-            status = random.choice(statuses)
-            created_at = now - timedelta(days=random.randint(1, 280), hours=random.randint(0, 23), minutes=random.randint(0, 59))
+        for o in range(1, num_orders + 1):
+            u_id = user_ids[(o * 13) % len(user_ids)]
+            status = f"status_{(o % 3) + 1}"
+            days_ago = (o * 3) % 360
+            hours_ago = (o * 7) % 24
+            minutes_ago = (o * 19) % 60
+            created_at = now - timedelta(days=days_ago, hours=hours_ago, minutes=minutes_ago)
 
             res = conn.execute(
                 text("""
@@ -192,15 +133,15 @@ def seed_database(
             )
             order_ids.append(res.scalar())
 
-        # 5. Order Items
+        # 5. Order items
         logger.info("Generating order items across orders...")
         total_items = 0
-        for o_id in order_ids:
-            num_items = random.choices([1, 2, 3, 4], weights=[0.4, 0.35, 0.18, 0.07])[0]
-            chosen_prods = random.sample(product_ids, k=min(num_items, len(product_ids)))
-
-            for p_id in chosen_prods:
-                qty = random.choices([1, 2, 3], weights=[0.75, 0.20, 0.05])[0]
+        for o_idx, o_id in enumerate(order_ids, start=1):
+            num_items = 1 + ((o_idx * 3) % 4)
+            for k in range(num_items):
+                p_idx = ((o_idx * 11 + k * 7) % len(product_ids))
+                p_id = product_ids[p_idx]
+                qty = 1 + ((o_idx * 5 + k * 3) % 5)
                 unit_price = product_prices[p_id]
 
                 conn.execute(
@@ -239,8 +180,10 @@ def main() -> None:
     """
     parser = argparse.ArgumentParser(description="Synthetic Data Generator for Multi-Agent Database System")
     parser.add_argument("--reset", action="store_true", help="Truncate existing domain tables before generating")
-    parser.add_argument("--users", type=int, default=120, help="Number of synthetic users (default: 120)")
-    parser.add_argument("--orders", type=int, default=850, help="Number of synthetic orders (default: 850)")
+    parser.add_argument("--users", type=int, default=150, help="Number of synthetic users (default: 150)")
+    parser.add_argument("--orders", type=int, default=900, help="Number of synthetic orders (default: 900)")
+    parser.add_argument("--categories", type=int, default=8, help="Number of synthetic categories (default: 8)")
+    parser.add_argument("--products", type=int, default=40, help="Number of synthetic products (default: 40)")
     parser.add_argument("--url", type=str, default="", help="Custom PostgreSQL database URL")
 
     args = parser.parse_args()
@@ -252,6 +195,8 @@ def main() -> None:
         reset=args.reset,
         num_users=args.users,
         num_orders=args.orders,
+        num_categories=args.categories,
+        num_products=args.products,
     )
 
 

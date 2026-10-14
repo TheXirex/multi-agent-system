@@ -4,11 +4,13 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+PLOTLY_PATTERN = r"<!--\s*PLOTLY_JSON_START\s*-->\s*([\s\S]*?)\s*<!--\s*PLOTLY_JSON_END\s*-->"
 
 
 class MLCodeRunner:
@@ -44,14 +46,14 @@ class MLCodeRunner:
             if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
         }
 
-    def _snapshot_json_files(self) -> Set[Path]:
+    def _snapshot_json_files(self) -> Dict[Path, float]:
         """
-        Takes a snapshot of existing JSON files in the output directory.
+        Takes a snapshot of existing JSON files and their modification times in the output directory.
         """
         if not self.output_dir.exists():
-            return set()
+            return {}
         return {
-            p
+            p: p.stat().st_mtime
             for p in self.output_dir.iterdir()
             if p.is_file() and p.suffix.lower() == ".json"
         }
@@ -67,6 +69,7 @@ class MLCodeRunner:
             Dict[str, Any]: Execution status, stdout, stderr, code, charts, and list of generated plots.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        start_time = datetime.now().timestamp()
         script_file = self.scripts_dir / f"ml_run_{timestamp}.py"
 
         # Write script to disk
@@ -103,28 +106,19 @@ class MLCodeRunner:
             stderr = stderr_bytes.decode("utf-8", errors="replace")
             returncode = process.returncode or 0
 
-            # Find newly created plots
-            current_images = self._snapshot_images()
-            new_image_paths = sorted(
-                list(current_images - initial_images),
-                key=lambda p: p.stat().st_mtime,
-            )
-
-            plots: List[Dict[str, Any]] = [
-                {
-                    "file_name": p.name,
-                    "file_path": str(p.resolve()),
-                    "url": f"/output/{p.name}",
-                }
-                for p in new_image_paths
-            ]
-
-            # Find newly created Plotly JSON charts
+            # 1. Detect newly created or updated Plotly JSON charts on disk
             current_jsons = self._snapshot_json_files()
-            new_json_paths = sorted(
-                list(current_jsons - initial_jsons),
-                key=lambda p: p.stat().st_mtime,
-            )
+            new_json_paths = [
+                p
+                for p, mtime in current_jsons.items()
+                if p not in initial_jsons or mtime > initial_jsons[p] or mtime >= (start_time - 2.0)
+            ]
+            new_json_paths = sorted(new_json_paths, key=lambda p: current_jsons[p])
+
+            if not new_json_paths and current_jsons:
+                newest = max(current_jsons.keys(), key=lambda p: current_jsons[p])
+                if current_jsons[newest] >= (start_time - 600.0):
+                    new_json_paths = [newest]
 
             charts: List[Dict[str, Any]] = []
             for jp in new_json_paths:
@@ -133,25 +127,45 @@ class MLCodeRunner:
                     if isinstance(spec_content, dict) and ("data" in spec_content or "layout" in spec_content):
                         charts.append({
                             "file_name": jp.name,
-                            "file_path": str(jp.resolve()),
                             "spec": spec_content,
                         })
                 except Exception as ex:
                     logger.warning(f"Could not parse chart JSON from {jp.name}: {ex}")
 
+            # 2. Fallback: extract Plotly JSON if emitted directly via stdout markers
+            if not charts:
+                for match in re.finditer(PLOTLY_PATTERN, stdout):
+                    spec_str = match.group(1).strip()
+                    try:
+                        spec_content = json.loads(spec_str)
+                        if isinstance(spec_content, dict) and ("data" in spec_content or "layout" in spec_content):
+                            charts.append({
+                                "file_name": "chart.json",
+                                "spec": spec_content,
+                            })
+                    except Exception as ex:
+                        logger.warning(f"Could not parse Plotly chart JSON from stdout: {ex}")
+
+            # 3. Clean stdout by replacing giant JSON blocks with a concise notification
+            clean_stdout = re.sub(
+                PLOTLY_PATTERN,
+                "\n[Interactive Plotly chart returned for database storage]\n",
+                stdout,
+            ).strip()
+
             success = returncode == 0
             return {
                 "success": success,
                 "returncode": returncode,
-                "stdout": stdout.strip(),
+                "stdout": clean_stdout,
+                "raw_stdout": stdout.strip(),
                 "stderr": stderr.strip(),
                 "error_trace": stderr.strip() if not success else "",
                 "code": code,
                 "script_path": str(script_file.resolve()),
-                "plots": plots,
+                "plots": [],
                 "charts": charts,
             }
-
 
         except asyncio.TimeoutError:
             try:
@@ -167,6 +181,7 @@ class MLCodeRunner:
                 "code": code,
                 "script_path": str(script_file.resolve()),
                 "plots": [],
+                "charts": [],
             }
         except Exception as exc:
             return {
@@ -178,4 +193,5 @@ class MLCodeRunner:
                 "code": code,
                 "script_path": str(script_file.resolve()),
                 "plots": [],
+                "charts": [],
             }

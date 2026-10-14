@@ -149,12 +149,11 @@ class MLAgent:
             try:
                 with self.engine.connect() as conn:
                     row = conn.execute(
-                        text("SELECT data, file_path FROM generated_datasets WHERE id = :id"),
+                        text("SELECT data FROM generated_datasets WHERE id = :id"),
                         {"id": resolved_id},
                     ).fetchone()
                     if row:
                         data_val = row[0]
-                        file_path_val = row[1]
                         if data_val:
                             if isinstance(data_val, str):
                                 data_val = json.loads(data_val)
@@ -163,11 +162,8 @@ class MLAgent:
                                 temp_csv = self.output_dir / f"dataset_{resolved_id}.csv"
                                 df.to_csv(temp_csv, index=False)
                                 resolved_path = temp_csv.resolve()
-                        if not resolved_path and file_path_val and Path(file_path_val).is_file():
-                            resolved_path = Path(file_path_val).resolve()
             except Exception as ex:
                 logger.warning(f"Failed to lookup dataset by ID {resolved_id}: {ex}")
-
 
         # 2. Lookup by given path
         if not resolved_path and given_path:
@@ -191,13 +187,13 @@ class MLAgent:
             else:
                 resolved_path = (self.output_dir / "dataset.csv").resolve()
 
-        # 4. If dataset_id was not provided, look up by file name in generated_datasets
-        if not resolved_id and self.engine and resolved_path.exists():
+        # 4. If dataset_id was not provided, look up by name in generated_datasets
+        if not resolved_id and self.engine and resolved_path and resolved_path.exists():
             try:
                 with self.engine.connect() as conn:
                     row = conn.execute(
-                        text("SELECT id FROM generated_datasets WHERE file_name = :fn OR file_path = :fp ORDER BY id DESC LIMIT 1"),
-                        {"fn": resolved_path.name, "fp": str(resolved_path)},
+                        text("SELECT id FROM generated_datasets WHERE name = :fn ORDER BY id DESC LIMIT 1"),
+                        {"fn": resolved_path.stem},
                     ).fetchone()
                     if row:
                         resolved_id = row[0]
@@ -246,7 +242,6 @@ class MLAgent:
             dataset_path=state.get("resolved_path", ""),
             dataset_preview=state.get("dataset_preview", ""),
             output_dir=str(self.output_dir),
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
         )
 
         messages = [
@@ -296,7 +291,6 @@ class MLAgent:
             output_dir=str(self.output_dir),
             current_code=state.get("current_code", ""),
             error_trace=state.get("error_trace", ""),
-            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
         )
 
         messages = [
@@ -365,7 +359,9 @@ class MLAgent:
                 elif isinstance(layout_title, str):
                     title = layout_title
             if not title:
-                title = ch.get("file_name", "Plotly Chart").replace(".json", "").replace("_", " ").title()
+                raw_title = ch.get("file_name", "Plotly Chart").replace(".json", "").replace("_", " ")
+                clean_title = re.sub(r"\b\d{8}[-_]?\d{4,6}\b", "", raw_title).strip()
+                title = clean_title.title() if clean_title else "Plotly Chart"
 
             chart_type = "plotly"
             if isinstance(spec, dict) and "data" in spec and isinstance(spec["data"], list) and len(spec["data"]) > 0:
@@ -422,6 +418,31 @@ class MLAgent:
             logger.error(f"Error saving script to database: {ex}", exc_info=True)
             return None
 
+    def _cleanup_intermediate_files(self) -> None:
+        """
+        Deletes all intermediate files (CSVs, JSON chart specs, python scripts, plots)
+        from disk immediately once intermediate execution stages are complete, ensuring
+        no traces remain in the local filesystem.
+        """
+        try:
+            if self.output_dir.exists():
+                for p in self.output_dir.iterdir():
+                    if p.is_file():
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception as ex:
+                            logger.debug(f"Could not delete temp file {p.name}: {ex}")
+            scripts_dir = self.output_dir / "ml_scripts"
+            if scripts_dir.exists():
+                for p in scripts_dir.iterdir():
+                    if p.is_file():
+                        try:
+                            p.unlink(missing_ok=True)
+                        except Exception as ex:
+                            logger.debug(f"Could not delete script file {p.name}: {ex}")
+        except Exception as ex:
+            logger.debug(f"Error during intermediate file cleanup: {ex}")
+
     async def run(
         self,
         task_description: str,
@@ -430,7 +451,7 @@ class MLAgent:
     ) -> Dict[str, Any]:
         """
         Runs the full end-to-end ML Agent workflow asynchronously, returning response
-        and ID-only metadata.
+        and ID-only metadata. Cleans up all intermediate files from disk once finished.
 
         Args:
             task_description (str): Natural language task requirement.
@@ -454,30 +475,33 @@ class MLAgent:
             "success": False,
         }
 
-        final_state = await self.graph.ainvoke(initial_state)
-        exec_res = final_state.get("execution_result") or {}
-        resolved_dataset_id = final_state.get("dataset_id")
+        try:
+            final_state = await self.graph.ainvoke(initial_state)
+            exec_res = final_state.get("execution_result") or {}
+            resolved_dataset_id = final_state.get("dataset_id")
 
-        charts = exec_res.get("charts", [])
-        chart_ids = self._save_charts_to_db(charts, dataset_id=resolved_dataset_id)
+            charts = exec_res.get("charts", [])
+            chart_ids = self._save_charts_to_db(charts, dataset_id=resolved_dataset_id)
 
-        code_script = final_state.get("current_code", "")
-        script_id = self._save_script_to_db(code_script, task_description, dataset_id=resolved_dataset_id)
+            code_script = final_state.get("current_code", "")
+            script_id = self._save_script_to_db(code_script, task_description, dataset_id=resolved_dataset_id)
 
-        metadata: Dict[str, Any] = {}
-        if chart_ids:
-            metadata["chart_id"] = chart_ids[0]
-            if len(chart_ids) > 1:
-                metadata["chart_ids"] = chart_ids
-        if script_id:
-            metadata["script_id"] = script_id
-        if resolved_dataset_id:
-            metadata["dataset_id"] = resolved_dataset_id
+            metadata: Dict[str, Any] = {}
+            if chart_ids:
+                metadata["chart_id"] = chart_ids[0]
+                if len(chart_ids) > 1:
+                    metadata["chart_ids"] = chart_ids
+            if script_id:
+                metadata["script_id"] = script_id
+            if resolved_dataset_id:
+                metadata["dataset_id"] = resolved_dataset_id
 
-        return {
-            "response": final_state.get("response", ""),
-            "metadata": metadata,
-        }
+            return {
+                "response": final_state.get("response", ""),
+                "metadata": metadata,
+            }
+        finally:
+            self._cleanup_intermediate_files()
 
     def run_sync(
         self,

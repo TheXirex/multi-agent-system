@@ -9,6 +9,8 @@ class OrchestratorState(TypedDict):
 
     user_query: str
     tools: List[ToolDefinition]
+    conversation_history: List[Dict[str, str]]
+    active_metadata: Dict[str, Any]
     requires_tools: bool
     direct_response: str
     thought: str

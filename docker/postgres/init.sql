@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'completed',
+    status VARCHAR(20) NOT NULL DEFAULT 'status_1',
     total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -62,5 +62,21 @@ CREATE TABLE IF NOT EXISTS generated_scripts (
     language VARCHAR(50) DEFAULT 'python',
     task_description TEXT,
     dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id VARCHAR(36) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL DEFAULT 'New Session',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(36) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    role VARCHAR(20) NOT NULL,
+    content TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

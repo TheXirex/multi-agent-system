@@ -107,11 +107,15 @@ class OrchestratorAgent:
         """
         user_query = state.get("user_query", "")
         tools = state.get("tools", [])
+        conversation_history = state.get("conversation_history", [])
+        active_metadata = state.get("active_metadata", {})
 
         tools_desc = self._format_tools_description(tools)
         system_text = prompt_loader.render(
             "routing",
             tools_description=tools_desc,
+            conversation_history=conversation_history,
+            active_metadata=active_metadata,
         )
 
         messages = [
@@ -188,9 +192,9 @@ class OrchestratorAgent:
         steps = state.get("steps", [])
         step_results: List[StepExecutionResult] = []
         raw_text_parts: List[str] = []
-        consolidated_metadata: Dict[str, Any] = {}
-
-        last_dataset_id: Optional[int] = None
+        active_meta = dict(state.get("active_metadata") or {})
+        consolidated_metadata: Dict[str, Any] = dict(active_meta)
+        last_dataset_id: Optional[int] = active_meta.get("dataset_id")
         last_exported_csv: Optional[str] = None
 
         for step in steps:
@@ -283,7 +287,12 @@ class OrchestratorAgent:
         )
 
         messages = [
-            SystemMessage(content=prompt_loader.render("synthesis")),
+            SystemMessage(
+                content=prompt_loader.render(
+                    "synthesis",
+                    conversation_history=state.get("conversation_history", []),
+                )
+            ),
             HumanMessage(content=prompt_content),
         ]
 
@@ -296,20 +305,29 @@ class OrchestratorAgent:
 
         return {"final_response": final_text}
 
-    async def run(self, user_query: str) -> FinalOrchestratorResult:
+    async def run(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        active_metadata: Optional[Dict[str, Any]] = None,
+    ) -> FinalOrchestratorResult:
         """
         Asynchronously runs Orchestrator LangGraph pipeline:
         1. Connects to MCP servers and discovers available tools.
-        2. Routes request (direct answer vs MCP tool execution).
+        2. Routes request (direct answer vs MCP tool execution) incorporating conversation history & active metadata.
         3. Returns structured FinalOrchestratorResult with metadata.
 
         Args:
             user_query (str): The natural language query from user.
+            conversation_history (Optional[List[Dict[str, str]]]): Recent messages for context.
+            active_metadata (Optional[Dict[str, Any]]): Currently active dataset/chart IDs in memory.
 
         Returns:
             FinalOrchestratorResult: Response containing answer, plan, and metadata.
         """
         logger.info(f"Orchestrator received query: {user_query}")
+        if conversation_history:
+            logger.info(f"Orchestrator with {len(conversation_history)} history messages and active metadata: {active_metadata}")
 
         async with self.mcp_manager.open_session() as session:
             tools = await session.list_tools()
@@ -318,13 +336,15 @@ class OrchestratorAgent:
             initial_state: OrchestratorState = {
                 "user_query": user_query,
                 "tools": tools,
+                "conversation_history": conversation_history or [],
+                "active_metadata": active_metadata or {},
                 "requires_tools": False,
                 "direct_response": "",
                 "thought": "",
                 "steps": [],
                 "execution_results": [],
                 "raw_text": "",
-                "metadata": {},
+                "metadata": dict(active_metadata or {}),
                 "final_response": "",
                 "error": None,
             }
@@ -352,15 +372,32 @@ class OrchestratorAgent:
                 metadata=final_state.get("metadata", {}),
             )
 
-    def run_sync(self, user_query: str) -> FinalOrchestratorResult:
+    def run_sync(
+        self,
+        user_query: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        active_metadata: Optional[Dict[str, Any]] = None,
+    ) -> FinalOrchestratorResult:
         """
         Synchronous execution helper for CLI or non-async environments.
         """
         try:
-            return asyncio.run(self.run(user_query))
+            return asyncio.run(
+                self.run(
+                    user_query,
+                    conversation_history=conversation_history,
+                    active_metadata=active_metadata,
+                )
+            )
         except RuntimeError:
             loop = asyncio.get_event_loop()
-            return loop.run_until_complete(self.run(user_query))
+            return loop.run_until_complete(
+                self.run(
+                    user_query,
+                    conversation_history=conversation_history,
+                    active_metadata=active_metadata,
+                )
+            )
 
 
 
