@@ -3,13 +3,81 @@ from typing import Any, Callable, Dict, List, Optional
 from nicegui import ui
 from ui.state import StudioState
 
-SUGGESTED_QUERIES = [
-    "Show table structures and summary distributions of available data",
-    "Extract the primary numerical and categorical attributes into a dataset",
-    "Train a regression model on primary numerical values and plot feature importances",
-    "Change the previous visualization into an interactive scatter plot with trendline",
-    "Cluster records into segments based on numerical features and plot the clusters",
-]
+
+
+
+def sanitize_plotly_monochrome(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Guarantees strict monochrome styling on Plotly specifications:
+    eliminates default blue/cyan/vibrant colors, applying the 9-shade grayscale theme.
+    """
+    if not isinstance(spec, dict):
+        return spec
+
+    mono_palette = [
+        "#f8f9fa",
+        "#ced4da",
+        "#adb5bd",
+        "#6c757d",
+        "#dee2e6",
+        "#e9ecef",
+        "#495057",
+    ]
+
+    layout = spec.setdefault("layout", {})
+    layout["autosize"] = True
+    layout.pop("width", None)
+    layout["paper_bgcolor"] = "#212529"
+    layout["plot_bgcolor"] = "#212529"
+    layout["font"] = {"color": "#f8f9fa"}
+    layout["colorway"] = mono_palette
+
+    if "template" in layout:
+        if isinstance(layout["template"], dict):
+            t_layout = layout["template"].setdefault("layout", {})
+            t_layout["colorway"] = mono_palette
+            t_layout["paper_bgcolor"] = "#212529"
+            t_layout["plot_bgcolor"] = "#212529"
+            t_layout["font"] = {"color": "#f8f9fa"}
+        else:
+            layout.pop("template", None)
+
+    for k in list(layout.keys()):
+        if k.startswith("xaxis") or k.startswith("yaxis"):
+            axis = layout[k]
+            if isinstance(axis, dict):
+                axis["gridcolor"] = "#343a40"
+                axis["zerolinecolor"] = "#495057"
+                axis["linecolor"] = "#495057"
+                axis["tickcolor"] = "#6c757d"
+                axis["tickfont"] = {"color": "#ced4da"}
+                axis["titlefont"] = {"color": "#f8f9fa"}
+
+    traces = spec.get("data", [])
+    if isinstance(traces, list):
+        for i, tr in enumerate(traces):
+            if not isinstance(tr, dict):
+                continue
+            mono_c = mono_palette[i % len(mono_palette)]
+            marker = tr.get("marker")
+            if isinstance(marker, dict):
+                mc = marker.get("color")
+                if not mc or (isinstance(mc, str) and any(b in mc.lower() for b in ("636efa", "1976d2", "1f77b4", "blue", "cyan", "sky", "indigo", "#0000ff"))):
+                    marker["color"] = mono_c
+                if "colorscale" in marker:
+                    marker["colorscale"] = "Greys"
+            elif marker is None and tr.get("type") in ("scatter", "bar", "pie"):
+                tr["marker"] = {"color": mono_c}
+
+            line = tr.get("line")
+            if isinstance(line, dict):
+                lc = line.get("color")
+                if not lc or (isinstance(lc, str) and any(b in lc.lower() for b in ("636efa", "1976d2", "1f77b4", "blue", "cyan", "sky", "indigo", "#0000ff"))):
+                    line["color"] = mono_c
+            elif line is None and tr.get("type") in ("scatter", "scattergl", "line"):
+                tr["line"] = {"color": mono_c}
+
+    return spec
 
 
 class ChatComponent:
@@ -45,17 +113,17 @@ class ChatComponent:
         """
         # Upload / Attach dialog
         with ui.dialog() as self.upload_dialog, ui.card().classes(
-            "bg-slate-900 border border-slate-700 p-6 rounded-xl space-y-4 max-w-md w-full shadow-2xl"
+            "bg-[#343a40] border border-[#495057] p-6 rounded-xl space-y-4 max-w-md w-full shadow-2xl"
         ):
             with ui.row().classes("w-full justify-between items-center"):
                 with ui.row().classes("items-center gap-2"):
-                    ui.icon("attach_file", size="sm").classes("text-indigo-400")
-                    ui.label("Attach Dataset (CSV / Excel)").classes("font-semibold text-sm text-slate-100")
-                ui.button(icon="close", on_click=self.upload_dialog.close).props("flat round dense color=slate-400")
+                    ui.icon("attach_file", size="sm").classes("text-[#ced4da]")
+                    ui.label("Attach Dataset (CSV / Excel)").classes("font-semibold text-sm text-[#f8f9fa]")
+                ui.button(icon="close", color=None, on_click=self.upload_dialog.close).props("flat round dense").classes("text-[#adb5bd] hover:text-[#f8f9fa]")
 
             ui.label(
                 "Attach a .csv or .xlsx file to your message. Upon sending, the dataset will be ingested and bound specifically to this session."
-            ).classes("text-xs text-slate-400 leading-relaxed")
+            ).classes("text-xs text-[#ced4da] leading-relaxed")
 
             ui.upload(
                 on_upload=self._handle_upload_event,
@@ -64,42 +132,34 @@ class ChatComponent:
             ).props("accept='.csv,.xlsx,.xls' dark flat bordered").classes("w-full")
 
         with ui.card().classes(
-            "flex flex-col h-full bg-slate-900/60 border border-slate-800 rounded-xl p-0 overflow-hidden shadow-lg w-full"
+            "flex flex-col h-full max-h-full bg-[#343a40]/60 border border-[#495057]/60 rounded-xl p-0 overflow-hidden shadow-lg w-full min-w-0"
         ):
             # 1. Chat Messages Thread (Scroll Area)
-            self.messages_scroll = ui.scroll_area().classes("flex-1 p-5 space-y-4 overflow-y-auto")
+            self.messages_scroll = ui.scroll_area().classes("flex-1 w-full p-4 overflow-x-hidden")
             with self.messages_scroll:
-                self.messages_container = ui.column().classes("w-full gap-4")
+                self.messages_container = ui.column().classes("w-full max-w-full gap-4 overflow-hidden")
 
-            # 2. Database-Agnostic Suggested Query Chips
-            with ui.column().classes("w-full px-4 pt-2.5 pb-2 border-t border-slate-800/80 bg-slate-900/40"):
-                ui.label("Suggested Analytical Queries & Refinements:").classes("text-[11px] font-medium text-slate-400")
-                with ui.row().classes("gap-1.5 flex-wrap"):
-                    for prompt_text in SUGGESTED_QUERIES:
-                        ui.chip(
-                            prompt_text,
-                            on_click=lambda p=prompt_text: self._handle_suggestion_click(p),
-                        ).props("dense clickable outline color=indigo-400").classes("text-[11px] hover:bg-indigo-950/40")
-
-            # 3. Chat Input Box Form
-            with ui.column().classes("w-full border-t border-slate-800 bg-slate-900/90 p-3 gap-2"):
+            # 2. Chat Input Box Form
+            with ui.column().classes("w-full border-t border-[#495057]/60 bg-[#212529] p-3 gap-2 shrink-0"):
                 # Pending attachments chip row
                 self.attachments_row = ui.row().classes("w-full gap-2 flex-wrap hidden")
 
                 with ui.row().classes("w-full items-center gap-2"):
                     self.attach_button = ui.button(
                         icon="attach_file",
+                        color=None,
                         on_click=self.upload_dialog.open,
-                    ).props("round flat dense color=slate-400 hover:text-indigo-400").tooltip("Attach CSV or Excel file (.csv, .xlsx)")
+                    ).props("round flat dense").classes("text-[#ced4da] hover:text-[#f8f9fa]").tooltip("Attach CSV or Excel file (.csv, .xlsx)")
 
                     self.query_input = ui.input(
                         placeholder="Ask analytical question, request ML modeling, or refine charts... (Enter to send)",
-                    ).props("outlined dense rounded autogrow clearable").classes("flex-1 text-sm bg-slate-800/50 text-white")
+                    ).props("outlined dense rounded autogrow clearable color=white").classes("flex-1 text-sm bg-[#343a40] text-[#f8f9fa]")
 
                     self.send_button = ui.button(
                         icon="send",
+                        color=None,
                         on_click=self._submit_query,
-                    ).props("rounded unelevated color=indigo-600").classes("px-4")
+                    ).props("rounded unelevated no-caps").classes("px-4 py-1.5 btn-light-accent font-bold transition-all")
 
                     self.query_input.on("keydown.enter", self._submit_query)
 
@@ -150,19 +210,14 @@ class ChatComponent:
         self.attachments_row.classes(remove="hidden")
         with self.attachments_row:
             for idx, att in enumerate(self.attached_files):
-                with ui.row().classes("items-center gap-1.5 bg-indigo-950/90 border border-indigo-700/60 text-indigo-200 text-xs px-2.5 py-1 rounded-lg"):
-                    ui.icon("attach_file", size="xs").classes("text-indigo-400")
+                with ui.row().classes("items-center gap-1.5 bg-[#343a40] border border-[#6c757d]/60 text-[#f8f9fa] text-xs px-2.5 py-1 rounded-lg"):
+                    ui.icon("attach_file", size="xs").classes("text-[#ced4da]")
                     ui.label(f"{att['filename']} ({att['size_str']})").classes("font-mono text-[11px]")
                     ui.button(
                         icon="close",
+                        color=None,
                         on_click=lambda i=idx: self._remove_attachment(i),
-                    ).props("flat round dense size=xs color=indigo-300").tooltip("Remove attachment")
-
-    async def _handle_suggestion_click(self, prompt: str) -> None:
-        if self.state.is_busy or not self.query_input:
-            return
-        self.query_input.value = prompt
-        await self._submit_query()
+                    ).props("flat round dense size=xs").classes("text-[#adb5bd] hover:text-[#f8f9fa]").tooltip("Remove attachment")
 
     async def _submit_query(self) -> None:
         if not self.query_input or self.state.is_busy:
@@ -186,24 +241,24 @@ class ChatComponent:
             return
 
         with self.messages_container:
-            with ui.row().classes("w-full justify-end"):
+            with ui.row().classes("w-full justify-end min-w-0"):
                 with ui.card().classes(
-                    "max-w-xl bg-indigo-600/90 text-white p-3.5 rounded-2xl rounded-tr-sm shadow-md space-y-1.5"
+                    "max-w-[85%] md:max-w-xl bg-[#495057] text-[#f8f9fa] p-3.5 rounded-2xl rounded-tr-sm shadow-md space-y-1.5 break-words overflow-hidden border border-[#6c757d]/60"
                 ):
-                    with ui.row().classes("items-center justify-between gap-3 text-xs opacity-80"):
-                        ui.label("You").classes("font-semibold text-[11px]")
+                    with ui.row().classes("items-center justify-between gap-3 text-xs opacity-90"):
+                        ui.label("You").classes("font-semibold text-[11px] text-[#f8f9fa]")
 
                     if attachments:
                         with ui.row().classes("gap-1.5 flex-wrap"):
                             for att in attachments:
                                 fn = att.get("filename", "dataset.csv")
                                 size_info = f" ({att.get('size_str')})" if att.get("size_str") else ""
-                                with ui.row().classes("items-center gap-1 bg-indigo-950/80 border border-indigo-400/50 text-indigo-100 text-[11px] px-2 py-0.5 rounded"):
-                                    ui.icon("attach_file", size="xs").classes("text-indigo-300")
-                                    ui.label(f"{fn}{size_info}").classes("font-mono")
+                                with ui.row().classes("items-center gap-1 bg-[#343a40] border border-[#6c757d]/60 text-[#ced4da] text-[11px] px-2 py-0.5 rounded"):
+                                    ui.icon("attach_file", size="xs").classes("text-[#ced4da]")
+                                    ui.label(f"{fn}{size_info}").classes("font-mono truncate max-w-[200px]")
 
                     if text:
-                        ui.label(text).classes("text-sm leading-relaxed whitespace-pre-wrap")
+                        ui.label(text).classes("text-sm leading-relaxed whitespace-pre-wrap break-words")
 
         self.scroll_to_bottom()
 
@@ -227,49 +282,51 @@ class ChatComponent:
         dataset_id = meta.get("dataset_id")
 
         with self.messages_container:
-            with ui.card().classes("w-full bg-slate-800/70 border border-slate-700/60 rounded-xl p-4 space-y-3 shadow-md"):
+            with ui.card().classes("w-full max-w-full bg-[#343a40]/80 border border-[#495057]/70 rounded-xl p-4 space-y-3 shadow-md overflow-hidden min-w-0"):
                 # Header row: Agent identity + metadata badges
                 with ui.row().classes("items-center justify-between w-full"):
                     with ui.row().classes("items-center gap-2"):
-                        ui.avatar("smart_toy", color="indigo-600", text_color="white", size="xs")
-                        ui.label("Orchestrator Agent").classes("font-semibold text-xs text-indigo-300")
+                        ui.avatar("smart_toy", size="xs").classes("bg-[#f8f9fa] text-[#212529] font-bold")
+                        ui.label("Orchestrator Agent").classes("font-semibold text-xs text-[#f8f9fa]")
 
-                    with ui.row().classes("items-center gap-1.5"):
+                    with ui.row().classes("items-center gap-1.5 flex-wrap"):
                         if dataset_id:
                             ds_name = dataset_data.get("name", f"dataset_{dataset_id}") if dataset_data else f"dataset_{dataset_id}"
-                            ui.badge(f"Dataset #{dataset_id}: {ds_name}", color="slate-900").classes("text-[10px] text-slate-400 font-mono")
+                            ui.badge(f"Dataset #{dataset_id}: {ds_name}").classes("bg-[#212529] text-[#ced4da] border border-[#495057]/70 text-[10px] font-mono truncate max-w-[220px]")
                         if charts_data:
-                            ui.badge(f"{len(charts_data)} Plotly Chart{'s' if len(charts_data) > 1 else ''}", color="indigo-900").classes("text-[10px] text-indigo-300 font-mono")
+                            ui.badge(f"{len(charts_data)} Plotly Chart{'s' if len(charts_data) > 1 else ''}").classes("bg-[#212529] text-[#f8f9fa] border border-[#6c757d]/70 text-[10px] font-mono")
 
                 # Markdown text content
-                ui.markdown(response_text).classes("text-sm text-slate-200 leading-relaxed")
+                ui.markdown(response_text).classes("text-sm text-[#dee2e6] leading-relaxed break-words overflow-x-auto max-w-full")
 
                 # Inline Plotly charts preview
                 if charts_data:
-                    with ui.column().classes("w-full gap-3 pt-2"):
-                        ui.label("Interactive Visualizations:").classes("text-xs font-semibold text-slate-300")
+                    with ui.column().classes("w-full max-w-full gap-3 pt-2 overflow-hidden"):
+                        ui.label("Interactive Visualizations:").classes("text-xs font-semibold text-[#ced4da]")
                         for ch in charts_data:
                             spec = ch.get("spec")
-                            if spec:
-                                with ui.card().classes("w-full bg-slate-900/90 border border-slate-700/60 p-3 rounded-lg overflow-hidden"):
+                            if spec and isinstance(spec, dict):
+                                spec = sanitize_plotly_monochrome(spec)
+                                with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3 rounded-lg overflow-hidden"):
                                     with ui.row().classes("w-full justify-between items-center mb-1"):
-                                        ui.label(ch.get("title", "Interactive Plot")).classes("text-xs font-semibold text-indigo-300 font-mono")
-                                        ui.badge(ch.get("chart_type", "plotly").upper(), color="indigo-950").classes("text-[10px] text-indigo-400 border border-indigo-800/50")
-                                    ui.plotly(spec).classes("w-full min-h-[350px]")
+                                        ui.label(ch.get("title", "Interactive Plot")).classes("text-xs font-semibold text-[#f8f9fa] font-mono truncate max-w-[70%]")
+                                        ui.badge(ch.get("chart_type", "plotly").upper()).classes("bg-[#343a40] text-[#ced4da] border border-[#6c757d]/50 text-[10px] shrink-0")
+                                    ui.plotly(spec).classes("w-full min-h-[300px] max-w-full")
 
                 # Expandable code blocks
                 if python_script and python_script.strip():
                     with ui.expansion("Generated ML Python Script", icon="terminal").props("dense default-opened=false").classes(
-                        "w-full bg-slate-900/60 border border-slate-800/80 rounded-md text-xs text-slate-300"
+                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-md text-xs text-[#ced4da] overflow-hidden"
                     ):
-                        ui.code(python_script.strip(), language="python").classes("w-full text-xs")
+                        with ui.element("div").classes("w-full max-w-full overflow-x-auto p-1"):
+                            ui.code(python_script.strip(), language="python").classes("text-xs")
 
                 if sql_query and sql_query.strip():
                     with ui.expansion("Generated SQL Statement", icon="code").props("dense default-opened=false").classes(
-                        "w-full bg-slate-900/60 border border-slate-800/80 rounded-md text-xs text-slate-300"
+                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-md text-xs text-[#ced4da] overflow-hidden"
                     ):
-                        ui.code(sql_query.strip(), language="sql").classes("w-full text-xs")
-
+                        with ui.element("div").classes("w-full max-w-full overflow-x-auto p-1"):
+                            ui.code(sql_query.strip(), language="sql").classes("text-xs")
 
         self.scroll_to_bottom()
 
@@ -280,11 +337,11 @@ class ChatComponent:
         if not self.messages_container:
             return
         with self.messages_container:
-            self.thinking_card = ui.card().classes("w-full bg-slate-800/50 border border-slate-700/40 rounded-lg p-3")
+            self.thinking_card = ui.card().classes("w-full bg-[#343a40]/90 border border-[#495057]/70 rounded-lg p-3")
             with self.thinking_card:
                 with ui.row().classes("items-center gap-3"):
-                    ui.spinner("dots", size="sm", color="indigo-400")
-                    ui.label("Thinking & executing multi-agent workflow...").classes("text-xs text-slate-400 italic")
+                    ui.spinner("dots", size="sm").classes("text-[#ced4da]")
+                    ui.label("Thinking & executing multi-agent workflow...").classes("text-xs text-[#ced4da] italic")
         self.scroll_to_bottom()
 
     def hide_thinking(self) -> None:

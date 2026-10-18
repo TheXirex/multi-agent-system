@@ -25,45 +25,34 @@ class SidebarComponent:
 
         self.drawer: Optional[ui.left_drawer] = None
         self.sessions_list_container: Optional[ui.column] = None
-        self.session_count_badge: Optional[ui.badge] = None
 
     def render(self) -> ui.left_drawer:
         """
         Creates the Left Drawer sidebar with NiceGUI.
         """
-        self.drawer = ui.left_drawer(value=True, bordered=True).classes(
-            "bg-slate-950/95 border-r border-slate-800 text-slate-200 flex flex-col p-0 w-72 md:w-80 h-full z-20"
+        self.drawer = ui.left_drawer(value=True, bordered=True).props("width=280").classes(
+            "bg-[#212529] border-r border-[#495057]/60 text-[#dee2e6] flex flex-col p-0 h-full z-20 overflow-hidden"
         )
 
         with self.drawer:
             # Top Section: New Chat Action
-            with ui.column().classes("w-full p-4 border-b border-slate-800/80 gap-3"):
-                with ui.row().classes("w-full items-center justify-between"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.icon("forum", size="1.2rem").classes("text-indigo-400")
-                        ui.label("Chat Sessions").classes("font-bold text-xs uppercase tracking-wider text-slate-300")
-                    self.session_count_badge = ui.badge("0", color="slate-800").classes("text-[10px] text-slate-400 font-mono")
+            with ui.column().classes("w-full p-3.5 border-b border-[#495057]/60 gap-2.5 shrink-0"):
+                with ui.row().classes("w-full items-center gap-2"):
+                    ui.icon("forum", size="1.05rem").classes("text-[#adb5bd]")
+                    ui.label("Chat Sessions").classes("font-bold text-xs uppercase tracking-wider text-[#ced4da]")
 
                 ui.button(
                     "New Chat",
                     icon="add",
+                    color=None,
                     on_click=self._handle_create_click,
-                ).props("unelevated color=indigo-600 no-caps").classes(
-                    "w-full text-xs font-semibold py-2 rounded-lg shadow-md shadow-indigo-600/20 hover:brightness-110"
+                ).props("unelevated no-caps").classes(
+                    "w-full text-xs font-bold py-2 rounded-lg btn-light-accent shadow-sm transition-all"
                 )
 
             # Middle Section: Scrollable Sessions List
-            with ui.scroll_area().classes("flex-1 px-3 py-3 overflow-y-auto"):
-                self.sessions_list_container = ui.column().classes("w-full gap-2")
-
-            # Bottom Section: Environment / System Info Footer
-            with ui.column().classes("w-full p-3 border-t border-slate-800/80 bg-slate-950 gap-1.5"):
-                with ui.row().classes("w-full justify-between items-center text-[10px] text-slate-500 font-mono"):
-                    ui.label("PostgreSQL Database")
-                    ui.badge("Connected", color="emerald-950").classes("text-emerald-400 text-[9px] border border-emerald-800/40")
-                with ui.row().classes("w-full justify-between items-center text-[10px] text-slate-500 font-mono"):
-                    ui.label("AI Orchestrator")
-                    ui.badge("Active", color="indigo-950").classes("text-indigo-400 text-[9px] border border-indigo-800/40")
+            with ui.scroll_area().classes("flex-1 w-full px-2.5 py-2.5 overflow-x-hidden"):
+                self.sessions_list_container = ui.column().classes("w-full gap-1.5 max-w-full overflow-hidden")
 
         return self.drawer
 
@@ -86,9 +75,6 @@ class SidebarComponent:
         if sessions is None:
             sessions = await self.client.fetch_sessions()
 
-        if self.session_count_badge:
-            self.session_count_badge.text = str(len(sessions))
-
         if not self.sessions_list_container:
             return
 
@@ -96,45 +82,35 @@ class SidebarComponent:
 
         if not sessions:
             with self.sessions_list_container:
-                with ui.card().classes("w-full bg-slate-900/40 border border-dashed border-slate-800 p-6 text-center items-center rounded-xl"):
-                    ui.icon("chat_bubble_outline", size="2rem").classes("text-slate-600 mb-1")
-                    ui.label("No conversations yet").classes("text-xs text-slate-400 font-medium")
-                    ui.label("Click '+ New Chat' to start").classes("text-[10px] text-slate-500")
+                with ui.card().classes("w-full max-w-full bg-[#343a40]/50 border border-dashed border-[#495057]/70 p-6 text-center items-center rounded-xl"):
+                    ui.icon("chat_bubble_outline", size="2rem").classes("text-[#6c757d] mb-1")
+                    ui.label("No conversations yet").classes("text-xs text-[#ced4da] font-medium")
+                    ui.label("Click '+ New Chat' to start").classes("text-[10px] text-[#adb5bd]")
             return
 
         with self.sessions_list_container:
             for s in sessions:
                 sid = s.get("id", "")
                 title = s.get("title", "New Session")
-                msg_count = s.get("message_count", 0)
-                updated_at = s.get("updated_at", "")[:10]
                 is_active = (sid == self.state.current_session_id)
 
-                card_classes = (
-                    "w-full p-2.5 rounded-lg cursor-pointer transition-all duration-150 group "
-                    + ("bg-indigo-950/50 border border-indigo-500/70 shadow-sm" if is_active else "bg-slate-900/60 border border-slate-800/80 hover:bg-slate-850 hover:border-slate-700")
+                item_classes = (
+                    "w-full max-w-full box-border px-2.5 py-2 rounded-lg cursor-pointer transition-all duration-150 flex items-center justify-between gap-1.5 overflow-hidden group "
+                    + ("bg-[#343a40] border border-[#adb5bd] shadow-sm shadow-black/20" if is_active else "bg-[#343a40]/30 border border-[#495057]/50 hover:bg-[#343a40]/70 hover:border-[#6c757d]")
                 )
 
-                with ui.card().classes(card_classes):
-                    with ui.row().classes("w-full items-center justify-between no-wrap gap-1"):
-                        # Session Title & Active Indicator
-                        with ui.row().classes("items-center gap-2 flex-1 min-w-0"):
-                            ui.icon("chat", size="0.9rem").classes("text-indigo-400" if is_active else "text-slate-500")
-                            session_lbl = ui.label(title).classes(
-                                "text-xs font-medium truncate flex-1 "
-                                + ("text-indigo-200 font-semibold" if is_active else "text-slate-300 group-hover:text-white")
-                            )
+                with ui.element("div").classes(item_classes) as item_row:
+                    with ui.row().classes("items-center gap-2 flex-1 min-w-0 overflow-hidden no-wrap"):
+                        ui.icon("chat", size="0.85rem").classes("text-[#f8f9fa] shrink-0" if is_active else "text-[#6c757d] shrink-0")
+                        ui.label(title).classes(
+                            "text-[11px] leading-tight truncate flex-1 min-w-0 "
+                            + ("text-[#f8f9fa] font-semibold" if is_active else "text-[#ced4da] group-hover:text-[#f8f9fa]")
+                        )
 
-                        # Delete Action Button
-                        del_btn = ui.button(icon="delete").props("dense flat round color=slate-500 size=xs").classes(
-                            "opacity-0 group-hover:opacity-100 hover:text-rose-400 transition"
-                        ).tooltip("Delete Session")
+                    del_btn = ui.button(icon="delete", color=None).props("dense flat round size=xs").classes(
+                        "opacity-0 group-hover:opacity-100 text-[#6c757d] hover:text-[#f8f9fa] transition shrink-0"
+                    ).tooltip("Delete Session")
 
-                    with ui.row().classes("w-full items-center justify-between pt-1 text-[10px] text-slate-500"):
-                        ui.label(f"{msg_count} message{'s' if msg_count != 1 else ''}").classes("font-mono")
-                        ui.label(updated_at).classes("font-mono")
-
-                    # Event bindings: clicking card selects session, clicking delete deletes
                     async def select_fn(sess_id=sid):
                         if sess_id != self.state.current_session_id:
                             await self.on_select_session(sess_id)
@@ -151,5 +127,5 @@ class SidebarComponent:
                                 else:
                                     await self.on_create_session()
 
-                    session_lbl.on("click", select_fn)
-                    del_btn.on("click", delete_fn)
+                    item_row.on("click", select_fn)
+                    del_btn.on("click.stop", delete_fn)

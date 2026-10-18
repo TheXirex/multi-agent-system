@@ -46,8 +46,334 @@ def create_ui() -> None:
     state = StudioState()
     client = DBStudioClient()
 
-    # Enable dark mode
+    # Enable dark mode and configure NiceGUI Quasar color palette
     ui.dark_mode().enable()
+    ui.colors(
+        primary="#343a40",
+        secondary="#495057",
+        accent="#ced4da",
+        dark="#212529",
+        dark_page="#212529",
+        positive="#adb5bd",
+        negative="#495057",
+        info="#ced4da",
+        warning="#6c757d",
+    )
+
+    # Inject global styles for the monochrome palette, responsive layout, and custom components
+    ui.add_head_html("""
+    <style>
+        :root, body, body.body--dark {
+            --q-primary: #343a40 !important;
+            --q-secondary: #495057 !important;
+            --q-accent: #ced4da !important;
+            --q-dark: #212529 !important;
+            --q-dark-page: #212529 !important;
+            --q-info: #ced4da !important;
+            --q-positive: #adb5bd !important;
+            --q-warning: #6c757d !important;
+            --q-negative: #495057 !important;
+        }
+        * {
+            outline-color: #ced4da !important;
+        }
+        ::selection {
+            background-color: #495057 !important;
+            color: #f8f9fa !important;
+        }
+        ::-moz-selection {
+            background-color: #495057 !important;
+            color: #f8f9fa !important;
+        }
+        a, a:visited {
+            color: #ced4da !important;
+            text-decoration-color: #6c757d !important;
+        }
+        a:hover {
+            color: #f8f9fa !important;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #212529 !important;
+            color: #dee2e6;
+        }
+        .q-drawer {
+            background-color: #212529 !important;
+        }
+        .q-header {
+            background-color: #212529 !important;
+        }
+
+        /* Quasar text & background overrides */
+        .text-primary {
+            color: #f8f9fa !important;
+        }
+        .bg-primary {
+            background-color: #343a40 !important;
+            color: #f8f9fa !important;
+        }
+        .text-info {
+            color: #ced4da !important;
+        }
+        .bg-info {
+            background-color: #343a40 !important;
+            color: #ced4da !important;
+        }
+
+        /* Buttons Styling & Text Contrast */
+        .q-btn {
+            text-transform: none !important;
+        }
+        .q-btn--standard, .q-btn--unelevated {
+            background-color: #343a40 !important;
+            color: #f8f9fa !important;
+            border: 1px solid #495057 !important;
+        }
+        .q-btn--standard .q-btn__content,
+        .q-btn--standard .q-icon,
+        .q-btn--unelevated .q-btn__content,
+        .q-btn--unelevated .q-icon {
+            color: #f8f9fa !important;
+        }
+        .q-btn--standard:hover, .q-btn--unelevated:hover {
+            background-color: #495057 !important;
+            border-color: #6c757d !important;
+        }
+
+        /* High-Contrast Light Buttons (.btn-light-accent) */
+        .btn-light-accent,
+        .btn-light-accent.q-btn,
+        .btn-light-accent.q-btn--unelevated,
+        .btn-light-accent.q-btn--standard {
+            background-color: #f8f9fa !important;
+            color: #212529 !important;
+            border: 1px solid #dee2e6 !important;
+        }
+        .btn-light-accent .q-btn__content,
+        .btn-light-accent .q-icon,
+        .btn-light-accent span,
+        .btn-light-accent div {
+            color: #212529 !important;
+        }
+        .btn-light-accent:hover {
+            background-color: #dee2e6 !important;
+            border-color: #ced4da !important;
+        }
+        .btn-light-accent:hover .q-btn__content,
+        .btn-light-accent:hover .q-icon,
+        .btn-light-accent:hover span {
+            color: #212529 !important;
+        }
+
+        /* Flat Buttons */
+        .q-btn--flat {
+            background-color: transparent !important;
+            border: none !important;
+        }
+        .q-btn--flat .q-btn__content {
+            color: inherit !important;
+        }
+
+        /* Quasar Tabs & Indicators */
+        .q-tabs {
+            color: #adb5bd !important;
+        }
+        .q-tab {
+            color: #adb5bd !important;
+        }
+        .q-tab--active {
+            color: #f8f9fa !important;
+        }
+        .q-tab--active .q-tab__icon,
+        .q-tab--active .q-tab__label {
+            color: #f8f9fa !important;
+        }
+        .q-tab__indicator {
+            background: #f8f9fa !important;
+            height: 2px !important;
+        }
+
+        /* Quasar Fields & Inputs (eliminate blue focus border) */
+        .q-field__control {
+            color: #ced4da !important;
+        }
+        .q-field__marginal {
+            color: #adb5bd !important;
+        }
+        .q-field--outlined .q-field__control:before {
+            border-color: #495057 !important;
+        }
+        .q-field--outlined:hover .q-field__control:before {
+            border-color: #6c757d !important;
+        }
+        .q-field--outlined.q-field--focused .q-field__control:after {
+            border-color: #ced4da !important;
+            border-width: 1px !important;
+        }
+        .q-field--focused .q-field__native,
+        .q-field--focused .q-field__prefix,
+        .q-field--focused .q-field__suffix {
+            color: #f8f9fa !important;
+        }
+        .q-field--focused .q-field__label {
+            color: #ced4da !important;
+        }
+        .q-field__native {
+            color: #f8f9fa !important;
+        }
+
+        /* Quasar Spinners & Ripple */
+        .q-spinner {
+            color: #ced4da !important;
+        }
+        .q-ripple {
+            color: #ced4da !important;
+        }
+        .q-focus-helper {
+            background: currentColor !important;
+            opacity: 0.15 !important;
+        }
+
+        /* Quasar Uploader */
+        .q-uploader {
+            background-color: #343a40 !important;
+            border: 1px solid #495057 !important;
+            color: #dee2e6 !important;
+        }
+        .q-uploader__header {
+            background-color: #212529 !important;
+            color: #f8f9fa !important;
+        }
+        .q-uploader__header-content {
+            color: #f8f9fa !important;
+        }
+        .q-uploader__title, .q-uploader__subtitle {
+            color: #ced4da !important;
+        }
+        .q-uploader__list {
+            background-color: #343a40 !important;
+        }
+        .q-uploader__file {
+            background-color: #212529 !important;
+            border: 1px solid #495057 !important;
+            color: #dee2e6 !important;
+        }
+
+        /* Quasar Notifications */
+        .q-notification {
+            background-color: #343a40 !important;
+            color: #f8f9fa !important;
+            border: 1px solid #495057 !important;
+        }
+        .q-notification__message {
+            color: #f8f9fa !important;
+        }
+        .q-notification__icon {
+            color: #ced4da !important;
+        }
+
+        /* Quasar Tooltips */
+        .q-tooltip {
+            background-color: #212529 !important;
+            color: #f8f9fa !important;
+            border: 1px solid #495057 !important;
+            font-size: 11px !important;
+        }
+
+        /* Quasar Badges & Expansions */
+        .q-badge {
+            background-color: #343a40 !important;
+            color: #f8f9fa !important;
+            border-color: #495057 !important;
+        }
+        .q-expansion-item__toggle-icon {
+            color: #ced4da !important;
+        }
+        .q-expansion-item--expanded .q-expansion-item__toggle-icon {
+            color: #f8f9fa !important;
+        }
+
+        /* Quasar Tables */
+        .q-table__container {
+            background-color: #212529 !important;
+            border-color: #495057 !important;
+        }
+        .q-table thead tr th {
+            background-color: #343a40 !important;
+            color: #f8f9fa !important;
+            font-weight: 600;
+            border-bottom: 1px solid #495057 !important;
+        }
+        .q-table tbody tr {
+            background-color: #212529 !important;
+            color: #dee2e6 !important;
+        }
+        .q-table tbody tr:hover {
+            background-color: #343a40 !important;
+        }
+        .q-table tbody td {
+            border-bottom: 1px solid rgba(73, 80, 87, 0.5) !important;
+        }
+        .q-table__bottom {
+            background-color: #212529 !important;
+            color: #adb5bd !important;
+            border-top: 1px solid #495057 !important;
+        }
+        .q-table__bottom .q-btn {
+            color: #ced4da !important;
+        }
+
+        /* Markdown Code Blocks */
+        pre {
+            margin: 0;
+            max-width: 100%;
+        }
+        .q-markdown pre, .q-markdown code {
+            background-color: #212529 !important;
+            color: #ced4da !important;
+            border-color: #495057 !important;
+        }
+        .q-markdown a {
+            color: #ced4da !important;
+        }
+
+        /* Scrollbars */
+        .q-scrollarea__content {
+            width: 100% !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        .q-scrollarea__thumb {
+            background: #495057 !important;
+            opacity: 0.7;
+        }
+        .q-scrollarea__thumb:hover {
+            background: #adb5bd !important;
+            opacity: 1;
+        }
+        .js-plotly-plot, .plot-container {
+            max-width: 100% !important;
+            width: 100% !important;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #212529;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #495057;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #adb5bd;
+        }
+    </style>
+    """)
 
     # Define callbacks before rendering components
     async def switch_to_session(session_id: str) -> None:
@@ -354,14 +680,14 @@ def create_ui() -> None:
     header.render()
     sidebar.render()
 
-    # Main Split Content: Chat (Left / 5 cols) & Workspace (Right / 7 cols)
+    # Main Split Content: Chat (Left / 50%) & Workspace (Right / 50%)
     with ui.element("main").classes(
-        "w-full px-5 py-4 grid grid-cols-1 lg:grid-cols-12 gap-5 h-[calc(100vh-68px)]"
+        "w-full px-4 py-3 grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-56px)] max-h-[calc(100vh-56px)] overflow-hidden bg-[#212529]"
     ):
-        with ui.column().classes("lg:col-span-5 h-full p-0 flex flex-col min-w-0"):
+        with ui.column().classes("h-full p-0 flex flex-col min-w-0 overflow-hidden"):
             chat.render()
 
-        with ui.column().classes("lg:col-span-7 h-full p-0 flex flex-col min-w-0"):
+        with ui.column().classes("h-full p-0 flex flex-col min-w-0 overflow-hidden"):
             workspace.render()
 
     # Initial session loading on mount

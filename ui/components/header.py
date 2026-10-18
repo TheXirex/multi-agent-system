@@ -24,36 +24,29 @@ class HeaderComponent:
 
     def render(self) -> None:
         with ui.header().classes(
-            "bg-slate-900/95 backdrop-blur-md border-b border-slate-800 text-white px-4 py-2.5 flex items-center justify-between z-30"
+            "bg-[#212529] backdrop-blur-md border-b border-[#495057]/60 text-white px-4 py-2.5 flex items-center justify-between z-30"
         ):
             # Left side: Sidebar Toggle & Brand Logo
             with ui.row().classes("items-center gap-3"):
                 ui.button(
                     icon="menu",
+                    color=None,
                     on_click=self.on_toggle_sidebar,
-                ).props("flat round dense color=slate-300").tooltip("Toggle Sessions Sidebar")
+                ).props("flat round dense").classes("text-[#ced4da] hover:text-[#f8f9fa]").tooltip("Toggle Sessions Sidebar")
 
                 with ui.row().classes("items-center gap-2"):
-                    ui.avatar("hub", color="indigo-600", text_color="white", size="sm").classes("shadow-md shadow-indigo-500/20")
-                    ui.label("Multi-Agent Studio").classes("font-bold text-sm tracking-wide text-white")
+                    ui.avatar("hub", size="sm").classes("bg-[#f8f9fa] text-[#212529] shadow-md shadow-white/10 font-bold")
+                    ui.label("Multi-Agent Studio").classes("font-bold text-sm tracking-wide text-[#f8f9fa]")
 
                 # Active Session Title
-                with ui.row().classes("items-center gap-2 pl-3 border-l border-slate-700/60 hidden md:flex"):
+                with ui.row().classes("items-center gap-2 pl-3 border-l border-[#495057]/60 hidden md:flex"):
                     self.session_title_label = ui.label(self.state.current_session_title).classes(
-                        "text-xs font-medium text-slate-300 max-w-xs truncate"
+                        "text-xs font-medium text-[#ced4da] max-w-xs truncate"
                     )
 
-            # Right side: Status Indicator & Quick New Chat Button
-            with ui.row().classes("items-center gap-3"):
-                with ui.badge(color="slate-800").classes("text-[11px] font-mono text-emerald-400 border border-emerald-500/30 px-2 py-0.5 gap-1.5 flex items-center"):
-                    ui.icon("fiber_manual_record", size="0.6rem").classes("text-emerald-400 animate-pulse")
-                    ui.label("Service Online").classes("text-[10px]")
-
-                ui.button(
-                    "New Chat",
-                    icon="add",
-                    on_click=self.on_new_chat,
-                ).props("dense unelevated color=indigo-600").classes("text-xs font-semibold px-3")
+            # Right side: (Clean minimal header without clutter)
+            with ui.row().classes("items-center gap-2"):
+                pass
 
     def update_session_title(self, title: str) -> None:
         """
