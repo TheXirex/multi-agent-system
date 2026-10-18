@@ -1,3 +1,4 @@
+import base64
 from datetime import datetime
 import json
 import logging
@@ -7,8 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import uuid
 
+import io
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import Engine, text
@@ -16,6 +18,7 @@ import uvicorn
 
 from agents.db_agent.config import get_settings as get_db_settings
 from agents.db_agent.db import create_db_engine
+from agents.db_agent.tools import IngestTabularFileTool
 from agents.orchestrator import FinalOrchestratorResult, OrchestratorAgent, build_orchestrator
 
 logger = logging.getLogger("ai_service")
@@ -126,9 +129,15 @@ class SessionDetail(BaseModel):
     messages: List[ChatMessageItem] = Field(default_factory=list)
 
 
+class AttachedFileItem(BaseModel):
+    filename: str = Field(..., description="Original filename of the attachment")
+    content_base64: str = Field(..., description="Base64-encoded raw file content")
+
+
 class QueryRequest(BaseModel):
-    query: str = Field(..., description="Natural language query from user or UI")
+    query: str = Field("", description="Natural language query from user or UI")
     session_id: Optional[str] = Field(None, description="Optional chat session ID for multi-turn conversation memory")
+    attachments: List[AttachedFileItem] = Field(default_factory=list, description="Optional list of attached files to ingest and bind to this session")
 
 
 class QueryResponse(BaseModel):
@@ -309,13 +318,15 @@ async def list_tools() -> Dict[str, Any]:
 @app.post("/query", response_model=QueryResponse)
 async def query_endpoint(request: QueryRequest) -> QueryResponse:
     """
-    Primary endpoint for natural language queries:
-    Maintains conversational memory (last 3 messages) and active session metadata in PostgreSQL,
+    Primary endpoint for natural language queries and attached dataset processing:
+    Binds any attached files exclusively to the target session_id,
+    maintains conversational memory and active session metadata in PostgreSQL,
     runs Orchestrator agent to process query, and persists message turns.
     """
     global _orchestrator
-    if not request.query.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    raw_query = (request.query or "").strip()
+    if not raw_query and not request.attachments:
+        raise HTTPException(status_code=400, detail="Query or file attachment must be provided.")
 
     if _orchestrator is None:
         _orchestrator = build_orchestrator()
@@ -323,7 +334,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     engine = get_db()
     session_id = request.session_id
 
-    # Ensure session exists or create a new one
+    # 1. Ensure session exists or create a new one FIRST so attachments are strictly bound to it
     with engine.begin() as conn:
         if session_id:
             exists = conn.execute(
@@ -342,7 +353,34 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
                 {"id": session_id},
             )
 
-    # Fetch last 3 messages for conversational memory
+    # 2. Ingest any attached files and bind them exclusively to this session
+    ingested_dataset_ids: List[int] = []
+    if request.attachments:
+        ingest_tool = IngestTabularFileTool(engine=engine)
+        for att in request.attachments:
+            try:
+                content_bytes = base64.b64decode(att.content_base64)
+            except Exception as b64_err:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid base64 encoding in attachment '{att.filename}': {b64_err}",
+                )
+
+            ingest_res = ingest_tool.execute(
+                file_bytes=content_bytes,
+                filename=att.filename,
+                session_id=session_id,
+            )
+            if ingest_res.get("status") == "error":
+                raise HTTPException(
+                    status_code=400,
+                    detail=ingest_res.get("error", f"Error ingesting attached file '{att.filename}'"),
+                )
+
+            created_ids = ingest_res.get("dataset_ids", [])
+            ingested_dataset_ids.extend(created_ids)
+
+    # 3. Fetch last 3 messages for conversational memory
     with engine.connect() as conn:
         recent_rows = conn.execute(
             text("""
@@ -386,9 +424,21 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
                 if v:
                     active_metadata[k] = v
 
+    # Inject session_id and newly ingested datasets into active metadata
+    active_metadata["session_id"] = session_id
+    if ingested_dataset_ids:
+        active_metadata["dataset_id"] = ingested_dataset_ids[0]
+        active_metadata["dataset_ids"] = ingested_dataset_ids
+
+    # Determine effective query text
+    effective_query = raw_query
+    if not effective_query and request.attachments:
+        att_names = ", ".join(f"`{a.filename}`" for a in request.attachments)
+        effective_query = f"Analyze the attached dataset ({att_names}), examine distributions and features, and create visualizations and models."
+
     try:
         result: FinalOrchestratorResult = await _orchestrator.run(
-            user_query=request.query,
+            user_query=effective_query,
             conversation_history=conversation_history,
             active_metadata=active_metadata,
         )
@@ -399,10 +449,22 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
 
         # Persist message turns in database
         now = datetime.now()
+        user_meta: Dict[str, Any] = {}
+        if request.attachments:
+            user_meta["attachments"] = [{"filename": a.filename} for a in request.attachments]
+            if ingested_dataset_ids:
+                user_meta["dataset_id"] = ingested_dataset_ids[0]
+                user_meta["dataset_ids"] = ingested_dataset_ids
+
         with engine.begin() as conn:
             conn.execute(
-                text("INSERT INTO chat_messages (session_id, role, content, metadata, created_at) VALUES (:sid, 'user', :content, '{}', :now)"),
-                {"sid": session_id, "content": request.query, "now": now},
+                text("INSERT INTO chat_messages (session_id, role, content, metadata, created_at) VALUES (:sid, 'user', :content, :meta, :now)"),
+                {
+                    "sid": session_id,
+                    "content": raw_query or effective_query,
+                    "meta": json.dumps(user_meta),
+                    "now": now,
+                },
             )
             conn.execute(
                 text("INSERT INTO chat_messages (session_id, role, content, metadata, created_at) VALUES (:sid, 'assistant', :content, :meta, :now)"),
@@ -415,7 +477,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
                 {"sid": session_id},
             ).scalar()
             if curr_title in ("New Session", "New Chat", None, ""):
-                clean_title = request.query.strip().split("\n")[0][:45]
+                clean_title = (raw_query or effective_query).strip().split("\n")[0][:45]
                 conn.execute(
                     text("UPDATE chat_sessions SET title = :title, updated_at = :now WHERE id = :sid"),
                     {"sid": session_id, "title": clean_title, "now": now},
@@ -431,6 +493,85 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     except Exception as exc:
         logger.error(f"Error processing query in AI service: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = Form(None),
+) -> Dict[str, Any]:
+    """
+    Uploads and ingests a CSV or Excel file by delegating directly to DBAgent's IngestTabularFileTool.
+    Multi-sheet Excel files are partitioned into individual datasets in PostgreSQL.
+    """
+    filename = file.filename or "uploaded_data.csv"
+    try:
+        content = await file.read()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}")
+
+    engine = get_db()
+    ingest_tool = IngestTabularFileTool(engine=engine)
+    result = ingest_tool.execute(file_bytes=content, filename=filename, session_id=session_id)
+
+    if result.get("status") == "error":
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("error", "Unknown file ingestion error"),
+        )
+
+    created_datasets = result.get("datasets", [])
+    primary_id = result.get("primary_dataset_id")
+    dataset_ids = result.get("dataset_ids", [])
+    summary_markdown = result.get("summary", "")
+
+    msg_lines = [
+        f"📁 **File uploaded successfully:** `{filename}`\n",
+    ]
+    if len(created_datasets) == 1:
+        ds = created_datasets[0]
+        msg_lines.append(f"Created dataset **#{ds['id']} ({ds['name']})**: {ds['row_count']} rows, {len(ds['columns'])} columns.")
+        msg_lines.append("\n**Columns:** " + ", ".join(f"`{c}`" for c in ds["columns"]))
+    else:
+        msg_lines.append(f"Detected and partitioned into **{len(created_datasets)} separate datasets** (by sheet):")
+        for ds in created_datasets:
+            msg_lines.append(f"- **Dataset #{ds['id']} (`{ds['name']}`)**: {ds['row_count']} rows, columns: " + ", ".join(f"`{c}`" for c in ds["columns"]))
+
+    msg_lines.append("\nYou can now request ML modeling, regression/classification, clustering, or data visualizations for this dataset.")
+    msg_markdown = "\n".join(msg_lines)
+
+    if session_id:
+        now = datetime.now()
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO chat_messages (session_id, role, content, metadata, created_at)
+                    VALUES (:sid, 'assistant', :content, :meta, :now)
+                """),
+                {
+                    "sid": session_id,
+                    "content": msg_markdown,
+                    "meta": json.dumps({
+                        "dataset_id": primary_id,
+                        "dataset_ids": dataset_ids,
+                        "uploaded_file": filename,
+                    }),
+                    "now": now,
+                },
+            )
+            conn.execute(
+                text("UPDATE chat_sessions SET updated_at = :now WHERE id = :sid"),
+                {"sid": session_id, "now": now},
+            )
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "primary_dataset_id": primary_id,
+        "dataset_ids": dataset_ids,
+        "datasets": created_datasets,
+        "message": msg_markdown,
+    }
 
 
 @app.get("/api/datasets/{dataset_id}")

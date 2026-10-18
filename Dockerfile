@@ -27,7 +27,8 @@ RUN uv venv /app/.ml_venv && VIRTUAL_ENV=/app/.ml_venv uv pip install --no-cache
     matplotlib \
     seaborn \
     statsmodels \
-    plotly
+    plotly \
+    openpyxl
 
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1

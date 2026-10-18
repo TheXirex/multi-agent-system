@@ -15,27 +15,54 @@ SUGGESTED_QUERIES = [
 class ChatComponent:
     """
     Renders the chat interface: messages thread, user/assistant cards,
-    inline interactive Plotly charts, expandable code snippets, suggested queries, and input box.
+    pending message file attachments, inline interactive Plotly charts,
+    expandable code snippets, suggested queries, and input box.
     """
 
     def __init__(
         self,
         state: StudioState,
-        on_send_query: Callable[[str], Any],
+        on_send_query: Callable[..., Any],
+        on_upload_file: Optional[Callable[[bytes, str], Any]] = None,
     ) -> None:
         self.state = state
         self.on_send_query = on_send_query
+        self.on_upload_file = on_upload_file
 
         self.messages_scroll: Optional[ui.scroll_area] = None
         self.messages_container: Optional[ui.column] = None
         self.query_input: Optional[ui.input] = None
         self.send_button: Optional[ui.button] = None
+        self.attach_button: Optional[ui.button] = None
         self.thinking_card: Optional[ui.card] = None
+        self.upload_dialog: Optional[ui.dialog] = None
+        self.attached_files: List[Dict[str, Any]] = []
+        self.attachments_row: Optional[ui.row] = None
 
     def render(self) -> None:
         """
         Builds the chat container layout with scroll area, suggestions, and input bar.
         """
+        # Upload / Attach dialog
+        with ui.dialog() as self.upload_dialog, ui.card().classes(
+            "bg-slate-900 border border-slate-700 p-6 rounded-xl space-y-4 max-w-md w-full shadow-2xl"
+        ):
+            with ui.row().classes("w-full justify-between items-center"):
+                with ui.row().classes("items-center gap-2"):
+                    ui.icon("attach_file", size="sm").classes("text-indigo-400")
+                    ui.label("Attach Dataset (CSV / Excel)").classes("font-semibold text-sm text-slate-100")
+                ui.button(icon="close", on_click=self.upload_dialog.close).props("flat round dense color=slate-400")
+
+            ui.label(
+                "Attach a .csv or .xlsx file to your message. Upon sending, the dataset will be ingested and bound specifically to this session."
+            ).classes("text-xs text-slate-400 leading-relaxed")
+
+            ui.upload(
+                on_upload=self._handle_upload_event,
+                auto_upload=True,
+                max_files=1,
+            ).props("accept='.csv,.xlsx,.xls' dark flat bordered").classes("w-full")
+
         with ui.card().classes(
             "flex flex-col h-full bg-slate-900/60 border border-slate-800 rounded-xl p-0 overflow-hidden shadow-lg w-full"
         ):
@@ -55,17 +82,81 @@ class ChatComponent:
                         ).props("dense clickable outline color=indigo-400").classes("text-[11px] hover:bg-indigo-950/40")
 
             # 3. Chat Input Box Form
-            with ui.row().classes("w-full p-3.5 border-t border-slate-800 bg-slate-900/90 items-center gap-2"):
-                self.query_input = ui.input(
-                    placeholder="Ask analytical question, request ML modeling, or refine charts... (Enter to send)",
-                ).props("outlined dense rounded autogrow clearable").classes("flex-1 text-sm bg-slate-800/50 text-white")
+            with ui.column().classes("w-full border-t border-slate-800 bg-slate-900/90 p-3 gap-2"):
+                # Pending attachments chip row
+                self.attachments_row = ui.row().classes("w-full gap-2 flex-wrap hidden")
 
-                self.send_button = ui.button(
-                    icon="send",
-                    on_click=self._submit_query,
-                ).props("rounded unelevated color=indigo-600").classes("px-4")
+                with ui.row().classes("w-full items-center gap-2"):
+                    self.attach_button = ui.button(
+                        icon="attach_file",
+                        on_click=self.upload_dialog.open,
+                    ).props("round flat dense color=slate-400 hover:text-indigo-400").tooltip("Attach CSV or Excel file (.csv, .xlsx)")
 
-                self.query_input.on("keydown.enter", self._submit_query)
+                    self.query_input = ui.input(
+                        placeholder="Ask analytical question, request ML modeling, or refine charts... (Enter to send)",
+                    ).props("outlined dense rounded autogrow clearable").classes("flex-1 text-sm bg-slate-800/50 text-white")
+
+                    self.send_button = ui.button(
+                        icon="send",
+                        on_click=self._submit_query,
+                    ).props("rounded unelevated color=indigo-600").classes("px-4")
+
+                    self.query_input.on("keydown.enter", self._submit_query)
+
+    async def _handle_upload_event(self, e: Any) -> None:
+        """
+        Attaches selected file to pending message state without calling backend immediately.
+        """
+        try:
+            if self.upload_dialog:
+                self.upload_dialog.close()
+
+            file_bytes = await e.file.read()
+            filename = getattr(e.file, "name", "dataset.csv")
+            size_kb = len(file_bytes) / 1024
+            size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.2f} MB"
+
+            self.attached_files.append({
+                "filename": filename,
+                "file_bytes": file_bytes,
+                "size_str": size_str,
+            })
+            self._refresh_attachment_chips()
+            ui.notify(f"Attached '{filename}' ({size_str})", type="positive", position="top-right")
+        except Exception as ex:
+            ui.notify(f"Attachment error: {ex}", type="negative", position="top-right")
+
+    def _remove_attachment(self, index: int) -> None:
+        """
+        Removes an attached file by index from pending attachments.
+        """
+        if 0 <= index < len(self.attached_files):
+            removed = self.attached_files.pop(index)
+            self._refresh_attachment_chips()
+            ui.notify(f"Removed attachment '{removed.get('filename')}'", type="info", position="top-right")
+
+    def _refresh_attachment_chips(self) -> None:
+        """
+        Renders attachment preview chips above the message input.
+        """
+        if not self.attachments_row:
+            return
+
+        self.attachments_row.clear()
+        if not self.attached_files:
+            self.attachments_row.classes(add="hidden")
+            return
+
+        self.attachments_row.classes(remove="hidden")
+        with self.attachments_row:
+            for idx, att in enumerate(self.attached_files):
+                with ui.row().classes("items-center gap-1.5 bg-indigo-950/90 border border-indigo-700/60 text-indigo-200 text-xs px-2.5 py-1 rounded-lg"):
+                    ui.icon("attach_file", size="xs").classes("text-indigo-400")
+                    ui.label(f"{att['filename']} ({att['size_str']})").classes("font-mono text-[11px]")
+                    ui.button(
+                        icon="close",
+                        on_click=lambda i=idx: self._remove_attachment(i),
+                    ).props("flat round dense size=xs color=indigo-300").tooltip("Remove attachment")
 
     async def _handle_suggestion_click(self, prompt: str) -> None:
         if self.state.is_busy or not self.query_input:
@@ -77,15 +168,19 @@ class ChatComponent:
         if not self.query_input or self.state.is_busy:
             return
         query_text = (self.query_input.value or "").strip()
-        if not query_text:
+        if not query_text and not self.attached_files:
             return
 
+        files_to_send = list(self.attached_files)
         self.query_input.value = ""
-        await self.on_send_query(query_text)
+        self.attached_files.clear()
+        self._refresh_attachment_chips()
 
-    def render_user_message(self, text: str) -> None:
+        await self.on_send_query(query_text, files_to_send)
+
+    def render_user_message(self, text: str, attachments: Optional[List[Dict[str, Any]]] = None) -> None:
         """
-        Renders a user message bubble.
+        Renders a user message bubble with optional attachment badges.
         """
         if not self.messages_container:
             return
@@ -93,11 +188,22 @@ class ChatComponent:
         with self.messages_container:
             with ui.row().classes("w-full justify-end"):
                 with ui.card().classes(
-                    "max-w-xl bg-indigo-600/90 text-white p-3.5 rounded-2xl rounded-tr-sm shadow-md space-y-1"
+                    "max-w-xl bg-indigo-600/90 text-white p-3.5 rounded-2xl rounded-tr-sm shadow-md space-y-1.5"
                 ):
                     with ui.row().classes("items-center justify-between gap-3 text-xs opacity-80"):
                         ui.label("You").classes("font-semibold text-[11px]")
-                    ui.label(text).classes("text-sm leading-relaxed whitespace-pre-wrap")
+
+                    if attachments:
+                        with ui.row().classes("gap-1.5 flex-wrap"):
+                            for att in attachments:
+                                fn = att.get("filename", "dataset.csv")
+                                size_info = f" ({att.get('size_str')})" if att.get("size_str") else ""
+                                with ui.row().classes("items-center gap-1 bg-indigo-950/80 border border-indigo-400/50 text-indigo-100 text-[11px] px-2 py-0.5 rounded"):
+                                    ui.icon("attach_file", size="xs").classes("text-indigo-300")
+                                    ui.label(f"{fn}{size_info}").classes("font-mono")
+
+                    if text:
+                        ui.label(text).classes("text-sm leading-relaxed whitespace-pre-wrap")
 
         self.scroll_to_bottom()
 

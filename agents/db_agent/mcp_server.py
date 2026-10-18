@@ -84,6 +84,32 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             "schema": agent.inspector.get_schema_summary(),
         }
 
+    @server.tool(
+        name="ingest_tabular_file",
+        description=(
+            "Ingests, validates, and stores a tabular file (CSV or Excel .xlsx/.xls) into the database. "
+            "For Excel workbooks with multiple sheets, each sheet is partitioned and stored as an individual dataset. "
+            "Returns dataset IDs, column definitions, and summaries, or structured errors if the file is empty, missing, or corrupted."
+        ),
+    )
+    def ingest_tabular_file(
+        file_path: str,
+        dataset_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Ingests a tabular file from disk into PostgreSQL.
+
+        Args:
+            file_path (str): Path to CSV or Excel file on disk.
+            dataset_name (Optional[str]): Optional custom dataset name.
+            session_id (Optional[str]): Optional session ID to bind this dataset exclusively to a chat session.
+
+        Returns:
+            Dict[str, Any]: Ingestion status, metadata, dataset details, or diagnostic error.
+        """
+        return agent.ingest_file(file_path=file_path, dataset_name=dataset_name, session_id=session_id)
+
 
 def create_mcp_server(agent: Optional[DBAgent] = None) -> MCPServer:
     """

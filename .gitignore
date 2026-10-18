@@ -220,3 +220,5 @@ __marimo__/
 .env
 output/*.csv
 !output/.gitkeep
+test_data/
+

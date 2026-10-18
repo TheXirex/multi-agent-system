@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from datetime import datetime
 import json
 import logging
@@ -7,10 +8,29 @@ from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Set
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 PLOTLY_PATTERN = r"<!--\s*PLOTLY_JSON_START\s*-->\s*([\s\S]*?)\s*<!--\s*PLOTLY_JSON_END\s*-->"
+
+
+def sanitize_code_comments(code: str) -> str:
+    """
+    Strips out prompt section headers, rule titles, and meta-comments from Python code.
+    """
+    rule_patterns = [
+        r"^\s*#\s*\d+\.\s*(?:Data Ingestion|Adaptive ML|Visualization|Output|Console|Execution|Requirements).*$",
+        r"^\s*#\s*(?:Output and Console Printing Rules|Visualization Requirements|Adaptive ML Algorithm Selection|Data Ingestion & Preprocessing|Execution Environment).*$",
+        r"^\s*#\s*Requirements for the Python script.*$",
+    ]
+    lines = []
+    for line in code.splitlines():
+        if any(re.match(pat, line, re.IGNORECASE) for pat in rule_patterns):
+            continue
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 class MLCodeRunner:
@@ -58,22 +78,59 @@ class MLCodeRunner:
             if p.is_file() and p.suffix.lower() == ".json"
         }
 
-    async def run_code(self, code: str) -> Dict[str, Any]:
+    async def run_code(
+        self,
+        code: str,
+        in_memory_datasets: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Executes Python code in a subprocess, capturing output, errors, and new chart artifacts.
+        Pre-loads in-memory datasets into the Python process so scripts can directly copy them.
+        Removes all temporary script files from disk upon completion.
 
         Args:
             code (str): Python script to execute.
+            in_memory_datasets (Optional[Dict[str, Any]]): Mapping of variable names to DataFrames/records.
 
         Returns:
-            Dict[str, Any]: Execution status, stdout, stderr, code, charts, and list of generated plots.
+            Dict[str, Any]: Execution status, stdout, stderr, clean code, charts, and plots.
         """
+        clean_code = sanitize_code_comments(code)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         start_time = datetime.now().timestamp()
         script_file = self.scripts_dir / f"ml_run_{timestamp}.py"
 
-        # Write script to disk
-        script_file.write_text(code, encoding="utf-8")
+        # Build in-memory dataset injection preamble if provided
+        executable_script_parts = []
+        if in_memory_datasets:
+            bootstrap_lines = [
+                "# --- SYSTEM IN-MEMORY DATASET INJECTION ---",
+                "import base64",
+                "import json",
+                "import pandas as pd",
+            ]
+            for var_name, data_val in in_memory_datasets.items():
+                if isinstance(data_val, pd.DataFrame):
+                    raw_json = data_val.to_json(orient="records", date_format="iso")
+                elif isinstance(data_val, list):
+                    raw_json = json.dumps(data_val, default=str)
+                elif isinstance(data_val, str):
+                    raw_json = data_val
+                else:
+                    raw_json = json.dumps(data_val, default=str)
+
+                b64_str = base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+                bootstrap_lines.append(
+                    f"{var_name} = pd.DataFrame(json.loads(base64.b64decode(b'{b64_str}').decode('utf-8')))"
+                )
+            bootstrap_lines.append("# --- END IN-MEMORY INJECTION ---\n")
+            executable_script_parts.append("\n".join(bootstrap_lines))
+
+        executable_script_parts.append(clean_code)
+        full_executable_code = "\n".join(executable_script_parts)
+
+        # Write script to disk for execution
+        script_file.write_text(full_executable_code, encoding="utf-8")
 
         initial_images = self._snapshot_images()
         initial_jsons = self._snapshot_json_files()
@@ -146,12 +203,27 @@ class MLCodeRunner:
                     except Exception as ex:
                         logger.warning(f"Could not parse Plotly chart JSON from stdout: {ex}")
 
-            # 3. Clean stdout by replacing giant JSON blocks with a concise notification
+            # 3. Clean stdout by replacing giant JSON blocks and stripping boilerplate phrases
             clean_stdout = re.sub(
                 PLOTLY_PATTERN,
                 "\n[Interactive Plotly chart returned for database storage]\n",
                 stdout,
             ).strip()
+
+            boilerplate_patterns = [
+                r"(?i)^\s*task\s+(?:completed|finished|executed)(?:\s+successfully)?\.?\s*$",
+                r"(?i)^\s*script\s+(?:completed|finished|executed)(?:\s+successfully)?\.?\s*$",
+                r"(?i)^\s*(?:starting|running|executing)\s+.*$",
+                r"(?i)^\s*plotly\s+chart\s+successfully\s+saved\s+to:?.*$",
+                r"(?i)^\s*figure\s+saved\s+to:?.*$",
+                r"(?i)^\s*data\s+loaded\s+successfully\.?\s*$",
+                r"(?i)^\s*done\.?\s*$",
+            ]
+            clean_lines = [
+                line for line in clean_stdout.splitlines()
+                if not any(re.match(pat, line) for pat in boilerplate_patterns)
+            ]
+            clean_stdout = re.sub(r"\n{3,}", "\n\n", "\n".join(clean_lines)).strip()
 
             success = returncode == 0
             return {
@@ -161,7 +233,7 @@ class MLCodeRunner:
                 "raw_stdout": stdout.strip(),
                 "stderr": stderr.strip(),
                 "error_trace": stderr.strip() if not success else "",
-                "code": code,
+                "code": clean_code,
                 "script_path": str(script_file.resolve()),
                 "plots": [],
                 "charts": charts,
@@ -178,7 +250,7 @@ class MLCodeRunner:
                 "stdout": "",
                 "stderr": f"Execution timed out after {self.timeout_seconds} seconds.",
                 "error_trace": f"TimeoutError: Execution exceeded {self.timeout_seconds}s limit.",
-                "code": code,
+                "code": clean_code,
                 "script_path": str(script_file.resolve()),
                 "plots": [],
                 "charts": [],
@@ -190,8 +262,14 @@ class MLCodeRunner:
                 "stdout": "",
                 "stderr": str(exc),
                 "error_trace": str(exc),
-                "code": code,
+                "code": clean_code,
                 "script_path": str(script_file.resolve()),
                 "plots": [],
                 "charts": [],
             }
+        finally:
+            # Immediately delete the script file from disk to ensure zero filesystem residue
+            try:
+                script_file.unlink(missing_ok=True)
+            except Exception as ex:
+                logger.debug(f"Could not delete temp script file {script_file.name}: {ex}")

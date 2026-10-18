@@ -86,14 +86,23 @@ class DBStudioClient:
             logger.warning(f"Error updating session {session_id}: {ex}")
         return False
 
-    async def send_query(self, query_text: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def send_query(
+        self,
+        query_text: str,
+        session_id: Optional[str] = None,
+        attachments: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
         """
-        Sends natural language query to the AI service endpoint with session memory.
+        Sends natural language query to the AI service endpoint with session memory and optional file attachments.
         """
+        payload: Dict[str, Any] = {"query": query_text, "session_id": session_id}
+        if attachments:
+            payload["attachments"] = attachments
+
         async with httpx.AsyncClient(timeout=300.0) as client:
             resp = await client.post(
                 f"{self.base_url}/api/query",
-                json={"query": query_text, "session_id": session_id},
+                json=payload,
             )
             resp.raise_for_status()
             return resp.json()
@@ -136,3 +145,27 @@ class DBStudioClient:
         except Exception as ex:
             logger.warning(f"Error fetching script {script_id}: {ex}")
         return None
+
+    async def upload_file(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Uploads a CSV or Excel file to the AI service backend for multi-agent ingestion.
+        """
+        files = {"file": (filename, file_bytes)}
+        data = {}
+        if session_id:
+            data["session_id"] = session_id
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/upload",
+                files=files,
+                data=data,
+            )
+            resp.raise_for_status()
+            return resp.json()
+

@@ -14,6 +14,7 @@ Recent Conversation Context (last {{ conversation_history | length }} messages):
 
 Active Session Context:
 {% if active_metadata.dataset_id %}- Current dataset_id in memory: {{ active_metadata.dataset_id }}{% endif %}
+{% if active_metadata.dataset_ids %}- Current dataset_ids in memory: {{ active_metadata.dataset_ids }}{% endif %}
 {% if active_metadata.chart_id %}- Current chart_id in memory: {{ active_metadata.chart_id }}{% endif %}
 {% if active_metadata.script_id %}- Current script_id in memory: {{ active_metadata.script_id }}{% endif %}
 {% endif %}
@@ -28,8 +29,11 @@ Guidelines:
    - Set "direct_response": "".
    - Choose suitable tools from the available tools listed above.
    - Formulate ordered steps to call the required tools according to their specified argument schemas.
-3. Handling follow-up, clarification, or refinement requests:
+3. Handling follow-up, clarification, refinement, or uploaded file requests:
+   - If the user uploaded a file (CSV or Excel) or refers to an uploaded dataset, use the active dataset_id from the session context to execute the requested modeling or analysis via run_ml_analysis.
+   - If the user answers a clarification question from a previous turn (e.g. selecting a target column or model type), pass their choice alongside the prior task into task_description and reuse the active dataset_id.
    - If the user asks to modify a previously generated chart (e.g., change chart type, adjust axes, or replot), refine an ML model, or perform additional analytics on previously extracted data, and a dataset_id is present in the active session context:
      - Reuse the existing dataset_id directly in run_ml_analysis without re-running SQL database extraction, unless the user specifically asks to query new or different data.
      - Provide the user's new instructions in the task_description of run_ml_analysis (e.g. "Change the previous chart into a pie chart showing...", "Refit the model using...", etc.).
 4. When a new task requires both data extraction and machine learning/analytics from scratch, order the steps sequentially (e.g. retrieve/export dataset first, then run machine learning analysis on that dataset).
+

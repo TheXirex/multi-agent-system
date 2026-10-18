@@ -197,16 +197,24 @@ class OrchestratorAgent:
         last_dataset_id: Optional[int] = active_meta.get("dataset_id")
         last_exported_csv: Optional[str] = None
 
+        session_id = active_meta.get("session_id")
+
         for step in steps:
             logger.info(f"Executing step {step.step_id}: {step.tool_name}")
 
             # Dynamic argument resolution: inject previous step's dataset_id or CSV output if required
             step_args = dict(step.arguments or {})
+            if session_id and "session_id" not in step_args:
+                step_args["session_id"] = session_id
+
+            if "dataset_ids" not in step_args and active_meta.get("dataset_ids") and step.tool_name in ("run_ml_analysis", "ml_analysis"):
+                step_args["dataset_ids"] = active_meta["dataset_ids"]
+
             if "dataset_id" in step_args:
                 val = step_args.get("dataset_id")
                 if (val is None or val == "" or str(val).lower() in {"0", "latest", "{{dataset_id}}"}) and last_dataset_id:
                     step_args["dataset_id"] = last_dataset_id
-            elif last_dataset_id and "dataset_id" not in step_args and step.tool_name == "run_ml_analysis":
+            elif last_dataset_id and "dataset_id" not in step_args and step.tool_name in ("run_ml_analysis", "ml_analysis"):
                 step_args["dataset_id"] = last_dataset_id
 
             if "dataset_path" in step_args:
@@ -250,18 +258,34 @@ class OrchestratorAgent:
                     consolidated_metadata["chart_ids"] = result.metadata["chart_ids"]
                 if "script_id" in result.metadata and result.metadata["script_id"]:
                     consolidated_metadata["script_id"] = result.metadata["script_id"]
+                if "dataset_ids" in result.metadata and result.metadata["dataset_ids"]:
+                    consolidated_metadata["dataset_ids"] = result.metadata["dataset_ids"]
+                if "code" in result.metadata and result.metadata["code"]:
+                    consolidated_metadata["code"] = result.metadata["code"]
+                if "status" in result.metadata and result.metadata["status"]:
+                    consolidated_metadata["status"] = result.metadata["status"]
+                if "questions" in result.metadata and result.metadata["questions"]:
+                    consolidated_metadata["questions"] = result.metadata["questions"]
 
             if result.structured_data and isinstance(result.structured_data, dict):
                 sd = result.structured_data
                 if "dataset_id" in sd and sd["dataset_id"]:
                     last_dataset_id = sd["dataset_id"]
                     consolidated_metadata.setdefault("dataset_id", sd["dataset_id"])
+                if "dataset_ids" in sd and sd["dataset_ids"]:
+                    consolidated_metadata.setdefault("dataset_ids", sd["dataset_ids"])
                 if "chart_id" in sd and sd["chart_id"]:
                     consolidated_metadata.setdefault("chart_id", sd["chart_id"])
                 if "chart_ids" in sd and sd["chart_ids"]:
                     consolidated_metadata.setdefault("chart_ids", sd["chart_ids"])
                 if "script_id" in sd and sd["script_id"]:
                     consolidated_metadata.setdefault("script_id", sd["script_id"])
+                if "code" in sd and sd["code"]:
+                    consolidated_metadata.setdefault("code", sd["code"])
+                if "status" in sd and sd["status"]:
+                    consolidated_metadata.setdefault("status", sd["status"])
+                if "questions" in sd and sd["questions"]:
+                    consolidated_metadata.setdefault("questions", sd["questions"])
                 if "file_path" in sd and sd["file_path"]:
                     last_exported_csv = sd["file_path"]
 
@@ -280,6 +304,11 @@ class OrchestratorAgent:
         """
         user_query = state.get("user_query", "")
         raw_text = state.get("raw_text", "")
+        metadata = state.get("metadata") or {}
+
+        # If a tool (like ML agent) requested user clarification, output the questions directly
+        if metadata.get("status") == "clarification_needed":
+            return {"final_response": raw_text}
 
         prompt_content = (
             f"User Question: {user_query}\n\n"

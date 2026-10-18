@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import logging
 import os
 import re
@@ -81,7 +82,7 @@ def create_ui() -> None:
             meta = msg.get("metadata") or {}
 
             if role == "user":
-                chat.render_user_message(content)
+                chat.render_user_message(content, attachments=meta.get("attachments"))
             else:
                 ds_id = meta.get("dataset_id")
                 ch_id = meta.get("chart_id")
@@ -142,7 +143,6 @@ def create_ui() -> None:
             sql_query=latest_sql_query,
         )
 
-
         await sidebar.refresh_sessions()
 
     async def handle_new_session() -> None:
@@ -155,19 +155,39 @@ def create_ui() -> None:
         if new_sess and "id" in new_sess:
             await switch_to_session(new_sess["id"])
 
-    async def handle_send_query(query_text: str) -> None:
+    async def handle_send_query(
+        query_text: str,
+        attached_files: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
         """
-        Executes query with orchestrator agent, rendering message turns and updating workspace.
+        Executes query with orchestrator agent, binding attached files to the session,
+        rendering message turns, and updating workspace.
         """
         if state.is_busy:
             return
 
         state.is_busy = True
-        chat.render_user_message(query_text)
+        chat.render_user_message(query_text, attachments=attached_files)
         chat.show_thinking()
 
         try:
-            result = await client.send_query(query_text, session_id=state.current_session_id)
+            # Prepare attachments payload
+            attachments_payload: List[Dict[str, str]] = []
+            if attached_files:
+                for att in attached_files:
+                    f_bytes = att.get("file_bytes")
+                    if f_bytes:
+                        b64_content = base64.b64encode(f_bytes).decode("utf-8")
+                        attachments_payload.append({
+                            "filename": att.get("filename", "dataset.csv"),
+                            "content_base64": b64_content,
+                        })
+
+            result = await client.send_query(
+                query_text=query_text,
+                session_id=state.current_session_id,
+                attachments=attachments_payload if attachments_payload else None,
+            )
             chat.hide_thinking()
 
             returned_sid = result.get("session_id")
@@ -253,6 +273,59 @@ def create_ui() -> None:
         finally:
             state.is_busy = False
 
+    async def handle_upload_file(file_bytes: bytes, filename: str) -> None:
+        """
+        Handles uploaded CSV or Excel file: calls backend upload endpoint,
+        retrieves created dataset, renders confirmation card, and updates workspace.
+        """
+        if state.is_busy:
+            return
+
+        state.is_busy = True
+        try:
+            res = await client.upload_file(
+                file_bytes=file_bytes,
+                filename=filename,
+                session_id=state.current_session_id,
+            )
+            chat.hide_thinking()
+
+            primary_ds_id = res.get("primary_dataset_id")
+            msg_markdown = res.get("message", f"File `{filename}` uploaded successfully.")
+
+            ds_data = None
+            if primary_ds_id:
+                ds_data = await client.fetch_dataset(primary_ds_id)
+
+            if ds_data:
+                state.current_dataset_id = ds_data.get("id")
+                state.current_dataset_name = ds_data.get("name")
+                state.current_dataset_rows = ds_data.get("rows", [])
+                state.current_dataset_columns = ds_data.get("columns", [])
+
+            chat.render_assistant_message(
+                response_text=msg_markdown,
+                metadata={"dataset_id": primary_ds_id},
+                dataset_data=ds_data,
+            )
+
+            workspace.update_workspace(
+                dataset_data=ds_data,
+            )
+
+            sessions = await client.fetch_sessions()
+            await sidebar.refresh_sessions(sessions)
+            ui.notify(f"File '{filename}' successfully uploaded and stored!", type="positive", position="top-right")
+
+        except Exception as error:
+            chat.hide_thinking()
+            ui.notify(f"File upload error: {error}", type="negative", position="top-right")
+            chat.render_assistant_message(
+                response_text=f"### File Ingestion Error\n\n```\n{error}\n```"
+            )
+        finally:
+            state.is_busy = False
+
     # Instantiate UI components
     sidebar = SidebarComponent(
         client=client,
@@ -270,6 +343,7 @@ def create_ui() -> None:
     chat = ChatComponent(
         state=state,
         on_send_query=handle_send_query,
+        on_upload_file=handle_upload_file,
     )
 
     workspace = WorkspaceComponent(

@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from agents.db_agent.config import Settings, get_settings
 from agents.db_agent.db import DatabaseInspector, create_db_engine
 from agents.db_agent.prompts import prompt_loader
-from agents.db_agent.tools import ExecuteSQLAndExportCSVTool, ToolRegistry
+from agents.db_agent.tools import ExecuteSQLAndExportCSVTool, IngestTabularFileTool, ToolRegistry
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 
@@ -91,6 +91,35 @@ class DBAgent:
             },
         }
 
+    def ingest_file(
+        self,
+        file_path: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        file_bytes: Optional[bytes] = None,
+        filename: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Ingests and validates tabular files (CSV, Excel) into the database.
+
+        Args:
+            file_path (Optional[str]): Path to the file on disk.
+            dataset_name (Optional[str]): Optional custom dataset name.
+            file_bytes (Optional[bytes]): Raw file bytes.
+            filename (Optional[str]): Explicit filename override.
+            session_id (Optional[str]): Optional session ID to bind this dataset exclusively to a chat session.
+
+        Returns:
+            Dict[str, Any]: Ingestion status, metadata, and dataset details or diagnostic error.
+        """
+        return self.tools.execute(
+            "ingest_tabular_file",
+            file_path=file_path,
+            dataset_name=dataset_name,
+            file_bytes=file_bytes,
+            filename=filename,
+            session_id=session_id,
+        )
 
     def _build_graph(self) -> Any:
         """
@@ -280,6 +309,8 @@ def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
     registry = ToolRegistry()
     sql_tool = ExecuteSQLAndExportCSVTool(engine=engine, output_dir=cfg.csv_output_dir)
     registry.register(sql_tool)
+    ingest_tool = IngestTabularFileTool(engine=engine)
+    registry.register(ingest_tool)
 
     active_llm = LLMFactory.create(
         provider=cfg.llm_provider,
