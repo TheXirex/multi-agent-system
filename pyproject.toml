@@ -34,6 +34,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["shared*", "agents*", "ui*", "scripts*"]
+include = ["shared*", "agents*", "ui*", "scripts*", "backend*"]
 
 

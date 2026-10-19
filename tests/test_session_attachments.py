@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, text
 from agents.db_agent.config import get_settings as get_db_settings
 from agents.db_agent.tools import IngestTabularFileTool
 from agents.ml_agent.agent import create_ml_agent
-from agents.api import QueryRequest, app
+from backend import QueryRequest, app
 from httpx import AsyncClient, ASGITransport
 
 async def run_verification():

@@ -24,7 +24,7 @@ class HeaderComponent:
 
     def render(self) -> None:
         with ui.header().classes(
-            "bg-[#212529] backdrop-blur-md border-b border-[#495057]/60 text-white px-4 py-2.5 flex items-center justify-between z-30"
+            "bg-[#212529] backdrop-blur-md border-b border-[#495057]/60 text-white px-4 py-0 flex items-center justify-between z-30 h-12"
         ):
             # Left side: Sidebar Toggle & Brand Logo
             with ui.row().classes("items-center gap-3"):
@@ -32,11 +32,9 @@ class HeaderComponent:
                     icon="menu",
                     color=None,
                     on_click=self.on_toggle_sidebar,
-                ).props("flat round dense").classes("text-[#ced4da] hover:text-[#f8f9fa]").tooltip("Toggle Sessions Sidebar")
+                ).props("flat dense").classes("text-[#ced4da] hover:text-[#f8f9fa] rounded-[6px]").tooltip("Toggle Sessions Sidebar")
 
-                with ui.row().classes("items-center gap-2"):
-                    ui.avatar("hub", size="sm").classes("bg-[#f8f9fa] text-[#212529] shadow-md shadow-white/10 font-bold")
-                    ui.label("Multi-Agent Studio").classes("font-bold text-sm tracking-wide text-[#f8f9fa]")
+                ui.label("Multi-Agent Studio").classes("font-bold text-sm tracking-wide text-[#f8f9fa]")
 
                 # Active Session Title
                 with ui.row().classes("items-center gap-2 pl-3 border-l border-[#495057]/60 hidden md:flex"):

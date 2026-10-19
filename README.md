@@ -9,7 +9,7 @@ A modular multi-agent platform featuring shared LLM integrations and domain-spec
 - **`agents/orchestrator/`**: Central Orchestrator Agent acting as an **MCP Client**. Directly answers conversational requests and coordinates specialized tool execution across domain agents via MCP, preserving structured metadata (CSV tables and SQL queries).
 - **`agents/db_agent/`**: Database agent built on **LangChain** and **LangGraph** (`StateGraph`) that inspects PostgreSQL schema, generates SQL queries, executes them, and exports results to CSV via an extensible tool registry. Exposes tools through MCP via `mcp_server.py`.
 - **`docker/postgres/init.sql`**: PostgreSQL initialization script with sample e-commerce data.
-- **`docker-compose.yml`**: Compose configuration orchestrating PostgreSQL (`postgres-db`), AI Orchestrator service (`ai-service`), and NiceGUI split-view UI (`frontend`).
+- **`backend/`**: FastAPI backend service exposing REST endpoints for multi-agent query orchestration, session management, and dataset ingestion.
 - **`output/`**: Directory where generated CSV files are saved.
 
 ## Environment & Dependency Management (`uv`)
@@ -68,7 +68,7 @@ Services:
 Run the backend AI service exposing the Orchestrator over HTTP:
 
 ```bash
-python -m agents.api
+python -m backend
 ```
 
 Or query the endpoint directly:

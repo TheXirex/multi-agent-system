@@ -428,6 +428,26 @@ class OrchestratorAgent:
                 )
             )
 
+    async def process_query(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        active_metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> FinalOrchestratorResult:
+        """
+        Async entrypoint for API routes processing queries with session-scoping.
+        """
+        meta = dict(active_metadata or {})
+        if session_id:
+            meta["session_id"] = session_id
+        return await self.run(
+            user_query=query,
+            conversation_history=history,
+            active_metadata=meta,
+        )
+
+
 
 
 def create_orchestrator(

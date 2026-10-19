@@ -1,7 +1,11 @@
 import asyncio
+import json
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from nicegui import ui
 from ui.state import StudioState
+
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 
@@ -113,13 +117,13 @@ class ChatComponent:
         """
         # Upload / Attach dialog
         with ui.dialog() as self.upload_dialog, ui.card().classes(
-            "bg-[#343a40] border border-[#495057] p-6 rounded-xl space-y-4 max-w-md w-full shadow-2xl"
+            "bg-[#343a40] border border-[#495057] p-6 rounded-[6px] space-y-4 max-w-md w-full shadow-2xl"
         ):
             with ui.row().classes("w-full justify-between items-center"):
                 with ui.row().classes("items-center gap-2"):
                     ui.icon("attach_file", size="sm").classes("text-[#ced4da]")
                     ui.label("Attach Dataset (CSV / Excel)").classes("font-semibold text-sm text-[#f8f9fa]")
-                ui.button(icon="close", color=None, on_click=self.upload_dialog.close).props("flat round dense").classes("text-[#adb5bd] hover:text-[#f8f9fa]")
+                ui.button(icon="close", color=None, on_click=self.upload_dialog.close).props("flat dense").classes("text-[#adb5bd] hover:text-[#f8f9fa]")
 
             ui.label(
                 "Attach a .csv or .xlsx file to your message. Upon sending, the dataset will be ingested and bound specifically to this session."
@@ -132,7 +136,7 @@ class ChatComponent:
             ).props("accept='.csv,.xlsx,.xls' dark flat bordered").classes("w-full")
 
         with ui.card().classes(
-            "flex flex-col h-full max-h-full bg-[#343a40]/60 border border-[#495057]/60 rounded-xl p-0 overflow-hidden shadow-lg w-full min-w-0"
+            "flex flex-col h-full max-h-full bg-[#343a40]/60 border border-[#495057]/60 rounded-[6px] p-0 overflow-hidden shadow-lg w-full min-w-0"
         ):
             # 1. Chat Messages Thread (Scroll Area)
             self.messages_scroll = ui.scroll_area().classes("flex-1 w-full p-4 overflow-x-hidden")
@@ -149,17 +153,23 @@ class ChatComponent:
                         icon="attach_file",
                         color=None,
                         on_click=self.upload_dialog.open,
-                    ).props("round flat dense").classes("text-[#ced4da] hover:text-[#f8f9fa]").tooltip("Attach CSV or Excel file (.csv, .xlsx)")
+                    ).props("flat dense").classes(
+                        "h-10 w-10 text-[#ced4da] hover:text-[#f8f9fa] bg-[#343a40] border border-[#495057] transition-all rounded-[6px] shrink-0"
+                    ).tooltip("Attach CSV or Excel file (.csv, .xlsx)")
 
                     self.query_input = ui.input(
-                        placeholder="Ask analytical question, request ML modeling, or refine charts... (Enter to send)",
-                    ).props("outlined dense rounded autogrow clearable color=white").classes("flex-1 text-sm bg-[#343a40] text-[#f8f9fa]")
+                        placeholder="Ask a question...",
+                    ).props("outlined dense autogrow color=white").classes(
+                        "flex-1 text-sm chat-query-input text-[#f8f9fa]"
+                    )
 
                     self.send_button = ui.button(
                         icon="send",
                         color=None,
                         on_click=self._submit_query,
-                    ).props("rounded unelevated no-caps").classes("px-4 py-1.5 btn-light-accent font-bold transition-all")
+                    ).props("unelevated no-caps").classes(
+                        "h-10 px-4 btn-light-accent font-bold transition-all flex items-center justify-center rounded-[6px] shrink-0"
+                    )
 
                     self.query_input.on("keydown.enter", self._submit_query)
 
@@ -243,7 +253,7 @@ class ChatComponent:
         with self.messages_container:
             with ui.row().classes("w-full justify-end min-w-0"):
                 with ui.card().classes(
-                    "max-w-[85%] md:max-w-xl bg-[#495057] text-[#f8f9fa] p-3.5 rounded-2xl rounded-tr-sm shadow-md space-y-1.5 break-words overflow-hidden border border-[#6c757d]/60"
+                    "max-w-[85%] md:max-w-xl bg-[#495057] text-[#f8f9fa] p-3.5 rounded-[6px] shadow-md space-y-1.5 break-words overflow-hidden border border-[#6c757d]/60"
                 ):
                     with ui.row().classes("items-center justify-between gap-3 text-xs opacity-90"):
                         ui.label("You").classes("font-semibold text-[11px] text-[#f8f9fa]")
@@ -253,7 +263,7 @@ class ChatComponent:
                             for att in attachments:
                                 fn = att.get("filename", "dataset.csv")
                                 size_info = f" ({att.get('size_str')})" if att.get("size_str") else ""
-                                with ui.row().classes("items-center gap-1 bg-[#343a40] border border-[#6c757d]/60 text-[#ced4da] text-[11px] px-2 py-0.5 rounded"):
+                                with ui.row().classes("items-center gap-1 bg-[#343a40] border border-[#6c757d]/60 text-[#ced4da] text-[11px] px-2 py-0.5 rounded-[6px]"):
                                     ui.icon("attach_file", size="xs").classes("text-[#ced4da]")
                                     ui.label(f"{fn}{size_info}").classes("font-mono truncate max-w-[200px]")
 
@@ -282,19 +292,11 @@ class ChatComponent:
         dataset_id = meta.get("dataset_id")
 
         with self.messages_container:
-            with ui.card().classes("w-full max-w-full bg-[#343a40]/80 border border-[#495057]/70 rounded-xl p-4 space-y-3 shadow-md overflow-hidden min-w-0"):
-                # Header row: Agent identity + metadata badges
-                with ui.row().classes("items-center justify-between w-full"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.avatar("smart_toy", size="xs").classes("bg-[#f8f9fa] text-[#212529] font-bold")
-                        ui.label("Orchestrator Agent").classes("font-semibold text-xs text-[#f8f9fa]")
-
-                    with ui.row().classes("items-center gap-1.5 flex-wrap"):
-                        if dataset_id:
-                            ds_name = dataset_data.get("name", f"dataset_{dataset_id}") if dataset_data else f"dataset_{dataset_id}"
-                            ui.badge(f"Dataset #{dataset_id}: {ds_name}").classes("bg-[#212529] text-[#ced4da] border border-[#495057]/70 text-[10px] font-mono truncate max-w-[220px]")
-                        if charts_data:
-                            ui.badge(f"{len(charts_data)} Plotly Chart{'s' if len(charts_data) > 1 else ''}").classes("bg-[#212529] text-[#f8f9fa] border border-[#6c757d]/70 text-[10px] font-mono")
+            with ui.card().classes("w-full max-w-full bg-[#343a40]/80 border border-[#495057]/70 rounded-[6px] p-4 space-y-3 shadow-md overflow-hidden min-w-0"):
+                # Header row: Agent identity
+                with ui.row().classes("items-center gap-2"):
+                    ui.avatar("smart_toy", size="xs").classes("bg-[#f8f9fa] text-[#212529] font-bold rounded-[6px]")
+                    ui.label("Orchestrator Agent").classes("font-semibold text-xs text-[#f8f9fa]")
 
                 # Markdown text content
                 ui.markdown(response_text).classes("text-sm text-[#dee2e6] leading-relaxed break-words overflow-x-auto max-w-full")
@@ -307,23 +309,23 @@ class ChatComponent:
                             spec = ch.get("spec")
                             if spec and isinstance(spec, dict):
                                 spec = sanitize_plotly_monochrome(spec)
-                                with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3 rounded-lg overflow-hidden"):
+                                with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3 rounded-[6px] overflow-hidden"):
                                     with ui.row().classes("w-full justify-between items-center mb-1"):
                                         ui.label(ch.get("title", "Interactive Plot")).classes("text-xs font-semibold text-[#f8f9fa] font-mono truncate max-w-[70%]")
-                                        ui.badge(ch.get("chart_type", "plotly").upper()).classes("bg-[#343a40] text-[#ced4da] border border-[#6c757d]/50 text-[10px] shrink-0")
+                                        ui.badge(ch.get("chart_type", "plotly").upper()).classes("bg-[#343a40] text-[#ced4da] border border-[#6c757d]/50 text-[10px] shrink-0 rounded-[6px]")
                                     ui.plotly(spec).classes("w-full min-h-[300px] max-w-full")
 
                 # Expandable code blocks
                 if python_script and python_script.strip():
                     with ui.expansion("Generated ML Python Script", icon="terminal").props("dense default-opened=false").classes(
-                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-md text-xs text-[#ced4da] overflow-hidden"
+                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-[6px] text-xs text-[#ced4da] overflow-hidden"
                     ):
                         with ui.element("div").classes("w-full max-w-full overflow-x-auto p-1"):
                             ui.code(python_script.strip(), language="python").classes("text-xs")
 
                 if sql_query and sql_query.strip():
                     with ui.expansion("Generated SQL Statement", icon="code").props("dense default-opened=false").classes(
-                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-md text-xs text-[#ced4da] overflow-hidden"
+                        "w-full max-w-full bg-[#212529] border border-[#495057]/70 rounded-[6px] text-xs text-[#ced4da] overflow-hidden"
                     ):
                         with ui.element("div").classes("w-full max-w-full overflow-x-auto p-1"):
                             ui.code(sql_query.strip(), language="sql").classes("text-xs")
@@ -337,7 +339,7 @@ class ChatComponent:
         if not self.messages_container:
             return
         with self.messages_container:
-            self.thinking_card = ui.card().classes("w-full bg-[#343a40]/90 border border-[#495057]/70 rounded-lg p-3")
+            self.thinking_card = ui.card().classes("w-full bg-[#343a40]/90 border border-[#495057]/70 rounded-[6px] p-3")
             with self.thinking_card:
                 with ui.row().classes("items-center gap-3"):
                     ui.spinner("dots", size="sm").classes("text-[#ced4da]")
@@ -365,3 +367,73 @@ class ChatComponent:
         """
         if self.messages_scroll:
             self.messages_scroll.scroll_to(percent=1.0)
+
+    def render_initial_orchestrator_message(self) -> None:
+        """
+        Renders a welcoming introductory card from the Orchestrator Agent
+        with suggested analytical queries that can be clicked to start immediately.
+        """
+        if not self.messages_container:
+            return
+
+        with self.messages_container:
+            with ui.card().classes(
+                "w-full max-w-full bg-[#343a40]/80 border border-[#495057]/70 rounded-[6px] p-4 space-y-3.5 shadow-md overflow-hidden min-w-0"
+            ):
+                with ui.row().classes("items-center gap-2"):
+                    ui.avatar("smart_toy", size="xs").classes("bg-[#f8f9fa] text-[#212529] font-bold rounded-[6px]")
+                    ui.label("Orchestrator Agent").classes("font-semibold text-xs text-[#f8f9fa]")
+
+                welcome_file = TEMPLATES_DIR / "welcome.md"
+                if welcome_file.exists():
+                    welcome_md = welcome_file.read_text(encoding="utf-8")
+                else:
+                    welcome_md = (
+                        "**Welcome to the Multi-Agent Studio!**\n\n"
+                        "I am the **AI Orchestrator**, coordinating domain agents to analyze data, execute SQL queries, and build machine learning workflows."
+                    )
+                ui.markdown(welcome_md).classes("text-sm text-[#dee2e6] leading-relaxed break-words")
+
+                suggestions_file = TEMPLATES_DIR / "suggestions.json"
+                raw_suggestions: List[Any] = []
+                if suggestions_file.exists():
+                    try:
+                        raw_suggestions = json.loads(suggestions_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                if not raw_suggestions:
+                    raw_suggestions = [
+                        "Show summary statistics and distribution of customer age and spending score",
+                        "Train a K-Means clustering model to find customer segments and visualize with PCA",
+                        "List all database tables and dataset records currently available",
+                        "Train a regression model to predict spending score based on customer features",
+                    ]
+
+                prompt_list: List[str] = [
+                    s if isinstance(s, str) else s.get("prompt", "")
+                    for s in raw_suggestions
+                ]
+
+                with ui.column().classes("w-full gap-2 pt-1"):
+                    for prompt_text in prompt_list:
+                        if not prompt_text:
+                            continue
+                        with ui.row().classes(
+                            "w-full items-center p-2.5 rounded-[6px] bg-[#212529]/90 border border-[#495057]/60 "
+                            "hover:border-[#adb5bd] hover:bg-[#212529] cursor-pointer transition group"
+                        ) as chip_row:
+                            ui.label(prompt_text).classes(
+                                "text-xs text-[#ced4da] group-hover:text-[#f8f9fa] font-medium leading-snug break-words"
+                            )
+
+                            async def on_chip_click(p=prompt_text):
+                                if self.state.is_busy:
+                                    return
+                                if self.query_input:
+                                    self.query_input.value = p
+                                await self._submit_query()
+
+                            chip_row.on("click", on_chip_click)
+
+        self.scroll_to_bottom()
+

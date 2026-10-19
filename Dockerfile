@@ -12,6 +12,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY pyproject.toml README.md ./
 COPY shared/ ./shared/
 COPY agents/ ./agents/
+COPY backend/ ./backend/
 COPY ui/ ./ui/
 COPY scripts/ ./scripts/
 
@@ -31,6 +32,7 @@ RUN uv venv /app/.ml_venv && VIRTUAL_ENV=/app/.ml_venv uv pip install --no-cache
     openpyxl
 
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app"
 ENV PYTHONUNBUFFERED=1
 ENV CSV_OUTPUT_DIR=/tmp/ml_sandbox
 ENV ML_VENV_PYTHON=/app/.ml_venv/bin/python
@@ -38,4 +40,4 @@ ENV ML_VENV_PYTHON=/app/.ml_venv/bin/python
 RUN mkdir -p /tmp/ml_sandbox
 
 
-CMD ["python", "-m", "agents.api"]
+CMD ["python", "-m", "backend"]

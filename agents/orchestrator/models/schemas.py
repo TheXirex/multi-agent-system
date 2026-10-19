@@ -71,9 +71,13 @@ class FinalOrchestratorResult(BaseModel):
 
     user_query: str = Field(description="Original user natural language query")
     plan: ExecutionPlan = Field(description="Orchestrator execution plan")
-    raw_answer: RawExecutionAnswer = Field(description="Raw tool execution details and outputs")
+    raw_answer: RawExecutionAnswer = Field(default_factory=RawExecutionAnswer, description="Raw tool execution details and outputs")
     final_response: str = Field(description="Final user-facing response synthesized by Orchestrator")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Domain metadata (table, SQL queries)")
+
+    @property
+    def response(self) -> str:
+        return self.final_response
 
     def to_dict(self) -> Dict[str, Any]:
         """

@@ -94,8 +94,6 @@ class WorkspaceComponent:
         self.tab_plots: Optional[ui.tab] = None
         self.tab_code: Optional[ui.tab] = None
 
-        # Header dataset badge
-        self.dataset_badge: Optional[ui.badge] = None
 
         # Tab 1: Table Data
         self.table_widget: Optional[ui.table] = None
@@ -114,43 +112,38 @@ class WorkspaceComponent:
         Builds the workspace container featuring tabbed navigation.
         """
         with ui.card().classes(
-            "flex flex-col h-full max-h-full bg-[#343a40]/60 border border-[#495057]/60 rounded-xl p-0 overflow-hidden shadow-lg w-full min-w-0"
+            "flex flex-col h-full max-h-full bg-[#343a40]/60 border border-[#495057]/60 rounded-[6px] p-0 overflow-hidden shadow-lg w-full min-w-0"
         ):
-            # Header Row with Tabs and Dataset Badge
+            # Header Row with Tabs (full-width borderless stretched)
             with ui.row().classes(
-                "w-full px-3 py-1.5 border-b border-[#495057]/60 bg-[#212529] items-center justify-between shrink-0"
+                "w-full px-2.5 py-1.5 border-b border-[#495057]/60 bg-[#212529] items-center shrink-0"
             ):
-                with ui.tabs().classes("text-[#adb5bd]").props("dense no-caps active-color=white indicator-color=white") as self.tabs:
-                    self.tab_table = ui.tab("Table Data", icon="table_chart").classes("text-xs font-semibold text-[#adb5bd] hover:text-[#f8f9fa]")
-                    self.tab_plots = ui.tab("Visualizations", icon="insights").classes("text-xs font-semibold text-[#adb5bd] hover:text-[#f8f9fa]")
-                    self.tab_code = ui.tab("Code & Scripts", icon="code").classes("text-xs font-semibold text-[#adb5bd] hover:text-[#f8f9fa]")
-
-                self.dataset_badge = ui.badge("").classes(
-                    "bg-[#343a40] text-[#f8f9fa] font-mono text-[10px] border border-[#6c757d]/60 hidden"
-                )
+                with ui.tabs().classes("w-full custom-workspace-tabs").props("dense no-caps stretch inline-label") as self.tabs:
+                    self.tab_table = ui.tab("Table Data", icon="table_chart").classes("flex-1")
+                    self.tab_plots = ui.tab("Visualizations", icon="insights").classes("flex-1")
+                    self.tab_code = ui.tab("Code & Scripts", icon="code").classes("flex-1")
 
             # Tab Panels Container
             with ui.tab_panels(self.tabs, value=self.tab_table).classes("w-full flex-1 bg-transparent p-3 min-h-0 overflow-hidden"):
 
                 # ==========================================
-                # PANEL 1: TABLE DATA
+                # PANEL 1: TABLE DATA (No nested extra card layer)
                 # ==========================================
                 with ui.tab_panel(self.tab_table).classes("p-0 h-full flex flex-col min-h-0 overflow-hidden"):
-                    with ui.card().classes("w-full h-full bg-[#212529]/80 border border-[#495057]/60 rounded-lg p-2.5 flex flex-col min-h-0 overflow-hidden"):
-                        with ui.column().classes(
-                            "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-[#343a40]/30 text-center p-8 rounded-lg"
-                        ) as self.table_empty_card:
-                            ui.icon("table_rows", size="2.5rem").classes("text-[#6c757d] mb-2")
-                            ui.label("No tabular dataset loaded yet").classes("text-sm text-[#ced4da] font-semibold")
-                            ui.label("Ask a question to query database records or run analytics.").classes("text-xs text-[#adb5bd]")
+                    with ui.column().classes(
+                        "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-transparent text-center p-8 rounded-[6px]"
+                    ) as self.table_empty_card:
+                        ui.icon("table_rows", size="2.5rem").classes("text-[#6c757d] mb-2")
+                        ui.label("No tabular dataset loaded yet").classes("text-sm text-[#ced4da] font-semibold")
+                        ui.label("Ask a question to query database records or run analytics.").classes("text-xs text-[#adb5bd]")
 
-                        self.table_widget = ui.table(
-                            columns=[],
-                            rows=[],
-                            row_key="id",
-                            pagination={"rowsPerPage": 15},
-                        ).props("dense flat bordered dark virtual-scroll").classes("w-full flex-1")
-                        self.table_widget.set_visibility(False)
+                    self.table_widget = ui.table(
+                        columns=[],
+                        rows=[],
+                        row_key="id",
+                        pagination={"rowsPerPage": 15},
+                    ).props("dense flat bordered dark virtual-scroll").classes("w-full h-full flex-1")
+                    self.table_widget.set_visibility(False)
 
                 # ==========================================
                 # PANEL 2: VISUALIZATIONS
@@ -158,7 +151,7 @@ class WorkspaceComponent:
                 with ui.tab_panel(self.tab_plots).classes("p-0 h-full flex flex-col min-h-0 overflow-hidden"):
                     with ui.scroll_area().classes("h-full w-full overflow-x-hidden"):
                         with ui.column().classes(
-                            "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-[#343a40]/30 text-center p-12 rounded-lg"
+                            "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-transparent text-center p-12 rounded-[6px]"
                         ) as self.plots_empty_card:
                             ui.icon("insights", size="2.5rem").classes("text-[#6c757d] mb-2")
                             ui.label("No interactive charts generated yet").classes("text-sm text-[#ced4da] font-semibold")
@@ -172,7 +165,7 @@ class WorkspaceComponent:
                 with ui.tab_panel(self.tab_code).classes("p-0 h-full flex flex-col min-h-0 overflow-hidden"):
                     with ui.scroll_area().classes("h-full w-full overflow-x-hidden"):
                         with ui.column().classes(
-                            "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-[#343a40]/30 text-center p-12 rounded-lg"
+                            "w-full h-full flex items-center justify-center border border-dashed border-[#495057]/70 bg-transparent text-center p-12 rounded-[6px]"
                         ) as self.code_empty_card:
                             ui.icon("terminal", size="2.5rem").classes("text-[#6c757d] mb-2")
                             ui.label("No scripts or queries executed yet").classes("text-sm text-[#ced4da] font-semibold")
@@ -194,11 +187,6 @@ class WorkspaceComponent:
         if dataset_data and dataset_data.get("columns") and dataset_data.get("rows"):
             rows = dataset_data["rows"]
             cols = dataset_data["columns"]
-            ds_name = dataset_data.get("name", "dataset")
-
-            if self.dataset_badge:
-                self.dataset_badge.text = f"{ds_name} ({len(rows)} rows)"
-                self.dataset_badge.classes(remove="hidden")
 
             if self.table_widget:
                 self.table_widget.columns = cols
@@ -210,8 +198,6 @@ class WorkspaceComponent:
             if self.table_empty_card:
                 self.table_empty_card.set_visibility(False)
         else:
-            if self.dataset_badge:
-                self.dataset_badge.classes(add="hidden")
             if self.table_widget:
                 self.table_widget.set_visibility(False)
             if self.table_empty_card:
@@ -229,10 +215,10 @@ class WorkspaceComponent:
                             spec = sanitize_plotly_monochrome(spec)
                             title = ch.get("title", "Interactive Visualization")
                             chart_type = ch.get("chart_type", "plotly")
-                            with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-xl shadow-md space-y-2 overflow-hidden"):
+                            with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-[6px] shadow-md space-y-2 overflow-hidden"):
                                 with ui.row().classes("w-full justify-between items-center"):
                                     ui.label(title).classes("text-xs font-semibold text-[#f8f9fa] font-mono truncate max-w-[70%]")
-                                    ui.badge(chart_type.upper()).classes("bg-[#343a40] text-[#ced4da] border border-[#6c757d]/50 text-[10px] shrink-0")
+                                    ui.badge(chart_type.upper()).classes("bg-[#343a40] text-[#ced4da] border border-[#6c757d]/50 text-[10px] shrink-0 rounded-[6px]")
                                 ui.plotly(spec).classes("w-full min-h-[380px] max-w-full")
             else:
                 self.plots_empty_card.set_visibility(True)
@@ -244,19 +230,19 @@ class WorkspaceComponent:
             with self.code_container:
                 if python_script and python_script.strip():
                     has_code = True
-                    with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-xl shadow-md overflow-hidden"):
+                    with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-[6px] shadow-md overflow-hidden"):
                         with ui.row().classes("w-full justify-between items-center mb-2"):
                             ui.label("Machine Learning Python Script").classes("text-xs font-semibold text-[#ced4da] font-mono")
-                            ui.badge("PYTHON").classes("bg-[#343a40] text-[#f8f9fa] border border-[#6c757d]/50 text-[10px] shrink-0")
+                            ui.badge("PYTHON").classes("bg-[#343a40] text-[#f8f9fa] border border-[#6c757d]/50 text-[10px] shrink-0 rounded-[6px]")
                         with ui.element("div").classes("w-full max-w-full overflow-x-auto"):
                             ui.code(python_script.strip(), language="python").classes("text-xs")
 
                 if sql_query and sql_query.strip():
                     has_code = True
-                    with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-xl shadow-md overflow-hidden"):
+                    with ui.card().classes("w-full max-w-full bg-[#212529] border border-[#495057]/70 p-3.5 rounded-[6px] shadow-md overflow-hidden"):
                         with ui.row().classes("w-full justify-between items-center mb-2"):
                             ui.label("PostgreSQL Query Statement").classes("text-xs font-semibold text-[#ced4da] font-mono")
-                            ui.badge("SQL").classes("bg-[#343a40] text-[#f8f9fa] border border-[#6c757d]/50 text-[10px] shrink-0")
+                            ui.badge("SQL").classes("bg-[#343a40] text-[#f8f9fa] border border-[#6c757d]/50 text-[10px] shrink-0 rounded-[6px]")
                         with ui.element("div").classes("w-full max-w-full overflow-x-auto"):
                             ui.code(sql_query.strip(), language="sql").classes("text-xs")
 

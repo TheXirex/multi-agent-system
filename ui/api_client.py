@@ -5,7 +5,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://localhost:8000")
+AI_SERVICE_URL = os.getenv("BACKEND_URL") or os.getenv("AI_SERVICE_URL", "http://localhost:8000")
 
 
 class DBStudioClient:
