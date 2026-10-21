@@ -22,6 +22,14 @@ from agents.orchestrator.models import (
     ToolDefinition,
 )
 from agents.orchestrator.prompts import prompt_loader
+from agents.orchestrator.utils import (
+    consolidate_step_metadata,
+    create_guardrail_refusal_response,
+    extract_step_text,
+    format_tools_description,
+    is_in_scope,
+    resolve_tool_arguments,
+)
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 
@@ -63,6 +71,7 @@ class OrchestratorAgent:
         workflow.add_node("direct_response", self._direct_response_node)
         workflow.add_node("execute_tools", self._execute_tools_node)
         workflow.add_node("synthesize_response", self._synthesize_response_node)
+        workflow.add_node("guardrail_refusal", self._guardrail_refusal_node)
 
         # Edges
         workflow.add_edge(START, "route_and_plan")
@@ -72,33 +81,15 @@ class OrchestratorAgent:
             {
                 "execute": "execute_tools",
                 "direct": "direct_response",
+                "refusal": "guardrail_refusal",
             },
         )
         workflow.add_edge("direct_response", END)
+        workflow.add_edge("guardrail_refusal", END)
         workflow.add_edge("execute_tools", "synthesize_response")
         workflow.add_edge("synthesize_response", END)
 
         return workflow.compile()
-
-    def _format_tools_description(self, tools: List[ToolDefinition]) -> str:
-        """
-        Formats available MCP tools into a readable specification for routing prompt.
-        """
-        if not tools:
-            return "No tools currently registered."
-
-        lines = []
-        for t in tools:
-            schema_params = t.input_schema.get("properties", {})
-            required_params = t.input_schema.get("required", [])
-            params_str = ", ".join(
-                f"{k}: {v.get('type', 'any')}{' (required)' if k in required_params else ''}"
-                for k, v in schema_params.items()
-            )
-            lines.append(f"- '{t.name}' (server: {t.server_name}): {t.description}")
-            if params_str:
-                lines.append(f"  Arguments: {{{params_str}}}")
-        return "\n".join(lines)
 
     async def _route_and_plan_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """
@@ -110,7 +101,7 @@ class OrchestratorAgent:
         conversation_history = state.get("conversation_history", [])
         active_metadata = state.get("active_metadata", {})
 
-        tools_desc = self._format_tools_description(tools)
+        tools_desc = format_tools_description(tools)
         system_text = prompt_loader.render(
             "routing",
             tools_description=tools_desc,
@@ -130,12 +121,17 @@ class OrchestratorAgent:
             if isinstance(plan, dict):
                 plan = ExecutionPlan.model_validate(plan)
 
-            if not plan.steps:
+            if not plan.is_in_scope:
+                plan.requires_tools = False
+                plan.steps = []
+            elif not plan.steps:
                 plan.requires_tools = False
                 if not plan.direct_response and plan.thought:
                     plan.direct_response = plan.thought
 
             return {
+                "is_in_scope": plan.is_in_scope,
+                "rejection_reason": plan.rejection_reason,
                 "requires_tools": plan.requires_tools,
                 "direct_response": plan.direct_response,
                 "thought": plan.thought,
@@ -146,19 +142,31 @@ class OrchestratorAgent:
             resp = await self.chat_model.ainvoke(messages)
             text = extract_text_from_message_content(resp.content)
             return {
+                "is_in_scope": True,
+                "rejection_reason": None,
                 "requires_tools": False,
                 "direct_response": text,
                 "thought": "",
                 "steps": [],
             }
 
-    def _route_after_planning(self, state: OrchestratorState) -> Literal["execute", "direct"]:
+    def _route_after_planning(self, state: OrchestratorState) -> Literal["execute", "direct", "refusal"]:
         """
-        Conditional edge: routes to tool execution or direct conversational answer.
+        Conditional edge: routes to tool execution, direct conversational answer,
+        or guardrail refusal for out-of-scope requests.
         """
+        if not is_in_scope(state):
+            return "refusal"
         if state.get("requires_tools") and state.get("steps"):
             return "execute"
         return "direct"
+
+    async def _guardrail_refusal_node(self, state: OrchestratorState) -> Dict[str, Any]:
+        """
+        Guardrail node: handles rejected out-of-scope queries deterministically,
+        preventing any tool execution and returning a polite refusal.
+        """
+        return create_guardrail_refusal_response(state)
 
     async def _direct_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
         """
@@ -202,25 +210,14 @@ class OrchestratorAgent:
         for step in steps:
             logger.info(f"Executing step {step.step_id}: {step.tool_name}")
 
-            # Dynamic argument resolution: inject previous step's dataset_id or CSV output if required
-            step_args = dict(step.arguments or {})
-            if session_id and "session_id" not in step_args:
-                step_args["session_id"] = session_id
-
-            if "dataset_ids" not in step_args and active_meta.get("dataset_ids") and step.tool_name in ("run_ml_analysis", "ml_analysis"):
-                step_args["dataset_ids"] = active_meta["dataset_ids"]
-
-            if "dataset_id" in step_args:
-                val = step_args.get("dataset_id")
-                if (val is None or val == "" or str(val).lower() in {"0", "latest", "{{dataset_id}}"}) and last_dataset_id:
-                    step_args["dataset_id"] = last_dataset_id
-            elif last_dataset_id and "dataset_id" not in step_args and step.tool_name in ("run_ml_analysis", "ml_analysis"):
-                step_args["dataset_id"] = last_dataset_id
-
-            if "dataset_path" in step_args:
-                val = str(step_args.get("dataset_path", "")).strip()
-                if (not val or val.lower() in {"", "latest", "{{csv}}", "{{previous_step_csv}}", "{{file_path}}"}) and last_exported_csv:
-                    step_args["dataset_path"] = last_exported_csv
+            step_args = resolve_tool_arguments(
+                tool_name=step.tool_name,
+                raw_arguments=step.arguments,
+                active_metadata=active_meta,
+                session_id=session_id,
+                last_dataset_id=last_dataset_id,
+                last_exported_csv=last_exported_csv,
+            )
 
             result = await session.call_tool(
                 tool_name=step.tool_name,
@@ -234,60 +231,16 @@ class OrchestratorAgent:
                 raw_text_parts.append(f"[Step {step.step_id} - Error]: {result.error}")
                 continue
 
-            step_text = ""
-            if result.structured_data and isinstance(result.structured_data, dict):
-                resp_text = result.structured_data.get("response") or result.structured_data.get("schema")
-                if resp_text:
-                    step_text = str(resp_text)
-                else:
-                    step_text = json.dumps(result.structured_data, indent=2, default=str)
-            elif result.raw_content:
-                step_text = str(result.raw_content)
-
+            step_text = extract_step_text(result)
             if step_text:
                 raw_text_parts.append(step_text)
 
-            # Consolidate strictly ID-only metadata
-            if result.metadata:
-                if "dataset_id" in result.metadata and result.metadata["dataset_id"]:
-                    last_dataset_id = result.metadata["dataset_id"]
-                    consolidated_metadata["dataset_id"] = result.metadata["dataset_id"]
-                if "chart_id" in result.metadata and result.metadata["chart_id"]:
-                    consolidated_metadata["chart_id"] = result.metadata["chart_id"]
-                if "chart_ids" in result.metadata and result.metadata["chart_ids"]:
-                    consolidated_metadata["chart_ids"] = result.metadata["chart_ids"]
-                if "script_id" in result.metadata and result.metadata["script_id"]:
-                    consolidated_metadata["script_id"] = result.metadata["script_id"]
-                if "dataset_ids" in result.metadata and result.metadata["dataset_ids"]:
-                    consolidated_metadata["dataset_ids"] = result.metadata["dataset_ids"]
-                if "code" in result.metadata and result.metadata["code"]:
-                    consolidated_metadata["code"] = result.metadata["code"]
-                if "status" in result.metadata and result.metadata["status"]:
-                    consolidated_metadata["status"] = result.metadata["status"]
-                if "questions" in result.metadata and result.metadata["questions"]:
-                    consolidated_metadata["questions"] = result.metadata["questions"]
-
-            if result.structured_data and isinstance(result.structured_data, dict):
-                sd = result.structured_data
-                if "dataset_id" in sd and sd["dataset_id"]:
-                    last_dataset_id = sd["dataset_id"]
-                    consolidated_metadata.setdefault("dataset_id", sd["dataset_id"])
-                if "dataset_ids" in sd and sd["dataset_ids"]:
-                    consolidated_metadata.setdefault("dataset_ids", sd["dataset_ids"])
-                if "chart_id" in sd and sd["chart_id"]:
-                    consolidated_metadata.setdefault("chart_id", sd["chart_id"])
-                if "chart_ids" in sd and sd["chart_ids"]:
-                    consolidated_metadata.setdefault("chart_ids", sd["chart_ids"])
-                if "script_id" in sd and sd["script_id"]:
-                    consolidated_metadata.setdefault("script_id", sd["script_id"])
-                if "code" in sd and sd["code"]:
-                    consolidated_metadata.setdefault("code", sd["code"])
-                if "status" in sd and sd["status"]:
-                    consolidated_metadata.setdefault("status", sd["status"])
-                if "questions" in sd and sd["questions"]:
-                    consolidated_metadata.setdefault("questions", sd["questions"])
-                if "file_path" in sd and sd["file_path"]:
-                    last_exported_csv = sd["file_path"]
+            last_dataset_id, last_exported_csv = consolidate_step_metadata(
+                result=result,
+                consolidated_metadata=consolidated_metadata,
+                last_dataset_id=last_dataset_id,
+                last_exported_csv=last_exported_csv,
+            )
 
         combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
 
@@ -367,6 +320,8 @@ class OrchestratorAgent:
                 "tools": tools,
                 "conversation_history": conversation_history or [],
                 "active_metadata": active_metadata or {},
+                "is_in_scope": True,
+                "rejection_reason": None,
                 "requires_tools": False,
                 "direct_response": "",
                 "thought": "",
@@ -387,6 +342,8 @@ class OrchestratorAgent:
             return FinalOrchestratorResult(
                 user_query=user_query,
                 plan=ExecutionPlan(
+                    is_in_scope=final_state.get("is_in_scope", True),
+                    rejection_reason=final_state.get("rejection_reason"),
                     requires_tools=final_state.get("requires_tools", False),
                     direct_response=final_state.get("direct_response", ""),
                     thought=final_state.get("thought", ""),

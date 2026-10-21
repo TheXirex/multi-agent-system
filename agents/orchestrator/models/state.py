@@ -11,6 +11,8 @@ class OrchestratorState(TypedDict):
     tools: List[ToolDefinition]
     conversation_history: List[Dict[str, str]]
     active_metadata: Dict[str, Any]
+    is_in_scope: bool
+    rejection_reason: Optional[str]
     requires_tools: bool
     direct_response: str
     thought: str

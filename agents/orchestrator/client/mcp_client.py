@@ -10,6 +10,7 @@ from mcp.client.stdio import stdio_client
 
 from agents.orchestrator.config import MCPServerConfig
 from agents.orchestrator.models import StepExecutionResult, ToolDefinition
+from shared.metadata import TRACKED_METADATA_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +216,8 @@ class ActiveMCPSession:
                             if "metadata" in parsed and isinstance(parsed["metadata"], dict):
                                 metadata.update(parsed["metadata"])
 
-                            # Directly capture ID keys if present at root
-                            for key in ("dataset_id", "chart_id", "chart_ids", "script_id"):
+                            # Directly capture domain metadata keys if present at root
+                            for key in TRACKED_METADATA_KEYS:
                                 if key in parsed:
                                     metadata.setdefault(key, parsed[key])
                     except (json.JSONDecodeError, TypeError):

@@ -31,10 +31,24 @@ class PlanStep(BaseModel):
 class ExecutionPlan(BaseModel):
     """
     Structured execution plan produced by the Orchestrator routing and planning step.
+    Includes guardrail checks for domain scope boundary enforcement.
     """
 
+    is_in_scope: bool = Field(
+        default=True,
+        description=(
+            "Whether the user request is within the system's specialized domain (databases, "
+            "SQL queries, data analytics, machine learning, data visualization, or greetings/assistance "
+            "regarding system capabilities). Must be set to False for off-topic requests such as cooking recipes, "
+            "creative writing, general trivia, politics, etc."
+        ),
+    )
+    rejection_reason: Optional[str] = Field(
+        default=None,
+        description="Concise reason for refusing execution if is_in_scope is False (e.g., 'Off-topic: cooking recipe requested').",
+    )
     requires_tools: bool = Field(default=True, description="Whether domain tools must be executed")
-    direct_response: str = Field(default="", description="Direct conversational response if no tools are required")
+    direct_response: str = Field(default="", description="Direct conversational response if no tools are required or if request is rejected")
     thought: str = Field(default="", description="Reasoning and planning rationale")
     steps: List[PlanStep] = Field(default_factory=list, description="Ordered tool execution steps")
 

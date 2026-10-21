@@ -19,6 +19,7 @@ from agents.ml_agent.prompts import prompt_loader
 from agents.ml_agent.runner import MLCodeRunner, sanitize_code_comments
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
+from shared.metadata import build_domain_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -679,12 +680,12 @@ class MLAgent:
             if final_state.get("needs_clarification"):
                 return {
                     "response": final_state.get("response", ""),
-                    "metadata": {
-                        "status": "clarification_needed",
-                        "questions": final_state.get("clarification_questions", []),
-                        "dataset_id": final_state.get("dataset_id"),
-                        "dataset_ids": final_state.get("dataset_ids"),
-                    },
+                    "metadata": build_domain_metadata(
+                        status="clarification_needed",
+                        questions=final_state.get("clarification_questions", []),
+                        dataset_id=final_state.get("dataset_id"),
+                        dataset_ids=final_state.get("dataset_ids"),
+                    ),
                 }
 
             exec_res = final_state.get("execution_result") or {}
@@ -698,19 +699,13 @@ class MLAgent:
             code_script = final_state.get("current_code", "")
             script_id = self._save_script_to_db(code_script, task_description, dataset_id=resolved_dataset_id, session_id=resolved_sess_id)
 
-            metadata: Dict[str, Any] = {}
-            if chart_ids:
-                metadata["chart_id"] = chart_ids[0]
-                if len(chart_ids) > 1:
-                    metadata["chart_ids"] = chart_ids
-            if script_id:
-                metadata["script_id"] = script_id
-            if resolved_dataset_id:
-                metadata["dataset_id"] = resolved_dataset_id
-            if resolved_dataset_ids and len(resolved_dataset_ids) > 1:
-                metadata["dataset_ids"] = resolved_dataset_ids
-            if code_script:
-                metadata["code"] = code_script
+            metadata = build_domain_metadata(
+                chart_ids=chart_ids,
+                script_id=script_id,
+                dataset_id=resolved_dataset_id,
+                dataset_ids=resolved_dataset_ids,
+                code=code_script,
+            )
 
             return {
                 "response": final_state.get("response", ""),
