@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 
 class CreateSessionRequest(BaseModel):
-    title: Optional[str] = Field(default="New Session", description="Optional title for the chat session")
+    title: Optional[str] = Field(default="New Chat", description="Optional title for the chat session")
 
 
 class UpdateSessionRequest(BaseModel):

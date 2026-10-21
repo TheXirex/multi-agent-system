@@ -60,7 +60,7 @@ async def create_session(req: Optional[CreateSessionRequest] = None) -> SessionS
     """
     engine = get_db()
     new_id = str(uuid.uuid4())
-    title = (req.title if req and req.title else "New Session").strip() or "New Session"
+    title = (req.title if req and req.title else "New Chat").strip() or "New Chat"
     now = datetime.now()
     with engine.begin() as conn:
         conn.execute(

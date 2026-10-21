@@ -13,7 +13,6 @@ COPY pyproject.toml README.md ./
 COPY shared/ ./shared/
 COPY agents/ ./agents/
 COPY backend/ ./backend/
-COPY ui/ ./ui/
 COPY scripts/ ./scripts/
 
 

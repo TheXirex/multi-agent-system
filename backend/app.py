@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS chat_sessions (
                     id VARCHAR(36) PRIMARY KEY,
-                    title VARCHAR(255) NOT NULL DEFAULT 'New Session',
+                    title VARCHAR(255) NOT NULL DEFAULT 'New Chat',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );

@@ -21,6 +21,22 @@ router = APIRouter(tags=["query"])
 AI_SERVICE_URL = os.getenv("AI_SERVICE_URL", "http://ai:8001").rstrip("/")
 
 
+def truncate_to_nearest_space(text: str, limit: int = 45) -> str:
+    """
+    Truncates text to the nearest whitespace before the specified character limit,
+    avoiding cutting words in half.
+    """
+    clean = text.strip()
+    if len(clean) <= limit:
+        return clean
+
+    sliced = clean[:limit]
+    last_space = sliced.rfind(" ")
+    if last_space > 0:
+        return f"{sliced[:last_space].rstrip()}..."
+    return f"{sliced.rstrip()}..."
+
+
 @router.post("/api/query", response_model=QueryResponse)
 @router.post("/query", response_model=QueryResponse)
 async def query_endpoint(request: QueryRequest) -> QueryResponse:
@@ -46,13 +62,13 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
             ).scalar()
             if not exists:
                 conn.execute(
-                    text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Session')"),
+                    text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Chat')"),
                     {"id": session_id},
                 )
         else:
             session_id = str(uuid.uuid4())
             conn.execute(
-                text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Session')"),
+                text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Chat')"),
                 {"id": session_id},
             )
 
@@ -211,9 +227,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
             {"sid": session_id},
         ).scalar()
         if first_count == 1:
-            title_sample = effective_query[:45].strip()
-            if len(effective_query) > 45:
-                title_sample += "..."
+            title_sample = truncate_to_nearest_space(effective_query, limit=45)
             conn.execute(
                 text("UPDATE chat_sessions SET title = :title, updated_at = :now WHERE id = :sid"),
                 {"sid": session_id, "title": title_sample, "now": now_asst},

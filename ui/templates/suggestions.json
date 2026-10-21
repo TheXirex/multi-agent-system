@@ -1,6 +1,0 @@
-[
-  "Show summary statistics and distribution of customer age and spending score",
-  "Train a K-Means clustering model to find customer segments and visualize with PCA",
-  "List all database tables and dataset records currently available",
-  "Train a regression model to predict spending score based on customer features"
-]

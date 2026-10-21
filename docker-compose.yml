@@ -74,18 +74,17 @@ services:
 
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile
     container_name: frontend
     restart: unless-stopped
-    command: ["python", "-m", "ui.app"]
-    environment:
-      BACKEND_URL: http://backend:8000
     ports:
       - "8080:8080"
+    environment:
+      - BACKEND_URL=http://backend:8000
     volumes:
-      - ./ui:/app/ui
-      - ./shared:/app/shared
+      - ./frontend:/app
+      - /app/node_modules
     depends_on:
       - backend
 
