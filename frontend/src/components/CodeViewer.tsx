@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-sql';
+import 'prismjs/themes/prism-tomorrow.css';
 import { Check, Copy } from 'lucide-react';
+import { formatSql } from '../utils/sqlFormatter';
 
 interface CodeViewerProps {
   code: string;
@@ -13,13 +15,26 @@ interface CodeViewerProps {
 export const CodeViewer: React.FC<CodeViewerProps> = ({ code, language, title }) => {
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    Prism.highlightAll();
+  const displayCode = useMemo(() => {
+    if (language === 'sql') {
+      return formatSql(code);
+    }
+    return code;
   }, [code, language]);
+
+  const highlightedHtml = useMemo(() => {
+    const grammar = Prism.languages[language];
+    if (!grammar) return displayCode.trim();
+    try {
+      return Prism.highlight(displayCode.trim(), grammar, language);
+    } catch {
+      return displayCode.trim();
+    }
+  }, [displayCode, language]);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(displayCode);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -49,7 +64,12 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({ code, language, title })
             fontWeight: 600,
             color: '#ced4da',
             fontFamily: 'var(--font-mono)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            maxWidth: '75%',
           }}
+          title={title}
         >
           {title}
         </span>
@@ -73,8 +93,22 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({ code, language, title })
         </div>
       </div>
       <div style={{ width: '100%', overflowX: 'auto', maxHeight: '450px' }}>
-        <pre style={{ margin: 0, padding: '10px', background: '#1c1f23', borderRadius: '4px' }}>
-          <code className={`language-${language}`}>{code.trim()}</code>
+        <pre
+          className={`language-${language}`}
+          style={{
+            margin: 0,
+            padding: '12px',
+            background: '#181a1d',
+            borderRadius: '4px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '12.5px',
+            lineHeight: 1.5,
+          }}
+        >
+          <code
+            className={`language-${language}`}
+            dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+          />
         </pre>
       </div>
     </div>

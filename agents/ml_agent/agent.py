@@ -3,7 +3,6 @@ from datetime import datetime
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 
 import pandas as pd
@@ -16,10 +15,11 @@ from agents.db_agent.config import get_settings as get_db_settings
 from agents.db_agent.db import create_db_engine
 from agents.ml_agent.config import MLAgentSettings, get_ml_settings
 from agents.ml_agent.prompts import prompt_loader
-from agents.ml_agent.runner import MLCodeRunner, sanitize_code_comments
+from agents.ml_agent.runner import MLCodeRunner
+from agents.ml_agent.utils.schemas import ClarityQuestion, MLCodeGenerationOutput, TaskClarityOutput
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
-from shared.metadata import build_domain_metadata
+from shared.metadata import build_domain_metadata, truncate_words
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class MLAgentState(TypedDict):
     """
 
     task_description: str
+    code_title: str
     dataset_path: str
     dataset_id: Optional[int]
     dataset_ids: Optional[List[int]]
@@ -71,44 +72,7 @@ class MLAgent:
         self.output_dir = output_dir.resolve()
         self.max_retries = max_retries
         self.engine = engine
-        self._ensure_tables()
         self.graph = self._build_graph()
-
-    def _ensure_tables(self) -> None:
-        """
-        Ensures generated_charts and generated_scripts tables exist in PostgreSQL with session_id support.
-        """
-        if not self.engine:
-            return
-        try:
-            with self.engine.begin() as conn:
-                conn.execute(text("""
-                    CREATE TABLE IF NOT EXISTS generated_charts (
-                        id SERIAL PRIMARY KEY,
-                        title VARCHAR(255),
-                        chart_type VARCHAR(50),
-                        spec JSONB NOT NULL,
-                        dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
-                        session_id VARCHAR(36),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    ALTER TABLE generated_charts ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
-                    CREATE INDEX IF NOT EXISTS idx_generated_charts_session_id ON generated_charts(session_id);
-
-                    CREATE TABLE IF NOT EXISTS generated_scripts (
-                        id SERIAL PRIMARY KEY,
-                        script TEXT NOT NULL,
-                        language VARCHAR(50) DEFAULT 'python',
-                        task_description TEXT,
-                        dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
-                        session_id VARCHAR(36),
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    ALTER TABLE generated_scripts ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
-                    CREATE INDEX IF NOT EXISTS idx_generated_scripts_session_id ON generated_scripts(session_id);
-                """))
-        except Exception as ex:
-            logger.warning(f"Could not initialize tables in MLAgent: {ex}")
 
     def _build_graph(self) -> Any:
         """
@@ -152,16 +116,24 @@ class MLAgent:
         Extracts executable Python code from markdown code blocks or raw response.
         """
         cleaned = raw_text.strip()
-        code_match = re.search(r"```(?:python)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
-        if code_match:
-            return code_match.group(1).strip()
+        if "```" in cleaned:
+            parts = cleaned.split("```")
+            for i in range(1, len(parts), 2):
+                block = parts[i]
+                if block.lower().startswith("python"):
+                    block = block[6:]
+                elif block.lower().startswith("py"):
+                    block = block[2:]
+                extracted = block.strip()
+                if extracted:
+                    return extracted
         return cleaned
 
     def _clean_identifier(self, name: str) -> str:
         """
         Transforms dataset or sheet name into a clean Python variable identifier.
         """
-        cleaned = re.sub(r"[^a-zA-Z0-9_]+", "_", name.lower()).strip("_")
+        cleaned = "".join(c if (c.isalnum() or c == "_") else "_" for c in name.lower()).strip("_")
         if not cleaned or cleaned[0].isdigit():
             cleaned = f"ds_{cleaned}"
         return cleaned
@@ -189,13 +161,13 @@ class MLAgent:
                 with self.engine.connect() as conn:
                     if session_id:
                         query_sql = text("""
-                            SELECT id, name, data FROM generated_datasets
+                            SELECT id, name, data FROM internal.generated_datasets
                             WHERE id = ANY(:ids) AND (session_id = :session_id OR session_id IS NULL)
                             ORDER BY id ASC
                         """)
                         query_params = {"ids": target_ids, "session_id": session_id}
                     else:
-                        query_sql = text("SELECT id, name, data FROM generated_datasets WHERE id = ANY(:ids) ORDER BY id ASC")
+                        query_sql = text("SELECT id, name, data FROM internal.generated_datasets WHERE id = ANY(:ids) ORDER BY id ASC")
                         query_params = {"ids": target_ids}
 
                     rows = conn.execute(query_sql, query_params).fetchall()
@@ -239,12 +211,12 @@ class MLAgent:
                 with self.engine.connect() as conn:
                     if session_id:
                         row = conn.execute(
-                            text("SELECT id, name, data FROM generated_datasets WHERE session_id = :session_id ORDER BY id DESC LIMIT 1"),
+                            text("SELECT id, name, data FROM internal.generated_datasets WHERE session_id = :session_id ORDER BY id DESC LIMIT 1"),
                             {"session_id": session_id},
                         ).fetchone()
                     else:
                         row = conn.execute(
-                            text("SELECT id, name, data FROM generated_datasets ORDER BY id DESC LIMIT 1")
+                            text("SELECT id, name, data FROM internal.generated_datasets ORDER BY id DESC LIMIT 1")
                         ).fetchone()
 
                     if row:
@@ -351,18 +323,84 @@ class MLAgent:
             dataset_preview=dataset_preview,
         )
 
+        needs_clarification = False
+        questions: List[Dict[str, Any]] = []
+
         try:
-            resp = await self.chat_model.ainvoke([HumanMessage(content=prompt)])
-            text_content = extract_text_from_message_content(resp.content)
+            structured_model = self.chat_model.with_structured_output(TaskClarityOutput)
+            result = await structured_model.ainvoke([HumanMessage(content=prompt)])
+            if isinstance(result, dict):
+                result = TaskClarityOutput.model_validate(result)
 
-            json_match = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", text_content)
-            json_str = json_match.group(1) if json_match else text_content
-            data = json.loads(json_str)
-
-            needs_clarification = bool(data.get("needs_clarification", False))
-            questions = data.get("questions", [])
+            if isinstance(result, TaskClarityOutput):
+                needs_clarification = result.needs_clarification
+                questions = [q.model_dump() for q in result.questions]
+        except Exception as ex:
+            logger.warning(f"Structured clarity check failed ({ex}), falling back to standard invoke")
+            try:
+                resp = await self.chat_model.ainvoke([HumanMessage(content=prompt)])
+                text_content = extract_text_from_message_content(resp.content).strip()
+                if "{" in text_content and "}" in text_content:
+                    json_str = text_content[text_content.find("{") : text_content.rfind("}") + 1]
+                else:
+                    json_str = text_content
+                data = json.loads(json_str)
+                needs_clarification = bool(data.get("needs_clarification", False))
+                questions = data.get("questions", [])
+            except Exception as fb_err:
+                logger.error(f"Fallback clarity check failed: {fb_err}")
 
             if needs_clarification and questions:
+                # Clarification is an extreme last resort: ONLY ask when NEITHER the data is understandable
+                # NOR the approach to use is understandable.
+                in_memory_dfs = state.get("in_memory_datasets", {})
+                has_usable_data = any(
+                    isinstance(df, pd.DataFrame) and not df.empty and len(df.columns) > 0
+                    for df in in_memory_dfs.values()
+                )
+
+                task_lower = task_desc.lower()
+                approach_keywords = [
+                    "regress", "classif", "predict", "train", "model", "cluster",
+                    "segment", "forecast", "detect", "score", "churn", "spend",
+                    "price", "sales", "revenue", "order", "distribut", "correlat",
+                    "trend", "scatter", "pca", "anomaly", "rfm", "customer"
+                ]
+                has_clear_approach = any(kw in task_lower for kw in approach_keywords)
+                has_recommendations = any(bool(q.get("recommended")) for q in questions)
+
+                # If the data is usable or the approach/task is specified, do NOT block the user.
+                # Auto-adopt recommended settings or default domain best practices and proceed.
+                if (has_usable_data or has_clear_approach) and (has_clear_approach or has_recommendations):
+                    rec_instructions = [
+                        f"{q.get('question', '')} -> Use recommended: {q.get('recommended')}"
+                        for q in questions if q.get("recommended")
+                    ]
+                    alt_options = []
+                    for q in questions:
+                        rec = q.get("recommended")
+                        opts = [o for o in q.get("options", []) if o != rec]
+                        if opts:
+                            alt_options.extend(opts)
+
+                    config_notes = []
+                    if rec_instructions:
+                        config_notes.append(f"Auto-selected configuration: {'; '.join(rec_instructions)}")
+                    if alt_options:
+                        config_notes.append(f"Other available candidate variables: {', '.join(alt_options)}")
+
+                    updated_task_desc = task_desc
+                    if config_notes:
+                        updated_task_desc = f"{task_desc}\n\n[{' | '.join(config_notes)}]"
+                        logger.info(f"Auto-adopting ML configuration instead of clarifying: {config_notes}")
+
+                    return {
+                        "needs_clarification": False,
+                        "clarification_questions": [],
+                        "task_description": updated_task_desc,
+                    }
+
+                # Only if BOTH data and approach are truly missing/unintelligible do we prompt the user:
                 lines = [
                     "### Clarification Needed Before Training ML Model\n",
                     "To build the most accurate and suitable model, please clarify the following questions or pick from the recommended options:\n",
@@ -403,13 +441,12 @@ class MLAgent:
 
     async def _generate_code_node(self, state: MLAgentState) -> Dict[str, Any]:
         """
-        Generates Python machine learning code tailored to the user's task.
+        Generates Python machine learning code and a concise title (4-5 words max) tailored to the user's task.
         """
         prompt = prompt_loader.render(
             "code_generation",
             task_description=state.get("task_description", ""),
             dataset_preview=state.get("dataset_preview", ""),
-            output_dir=str(self.output_dir),
             is_multi_dataset=state.get("is_multi_dataset", False),
             copy_instructions=state.get("copy_instructions", "df = data.copy()"),
         )
@@ -417,13 +454,38 @@ class MLAgent:
         messages = [
             HumanMessage(content=prompt),
         ]
-        resp = await self.chat_model.ainvoke(messages)
-        content = extract_text_from_message_content(resp.content)
-        code = self._extract_python_code(content)
-        clean_code = sanitize_code_comments(code)
+
+        code = ""
+        code_title = ""
+        try:
+            structured_model = self.chat_model.with_structured_output(MLCodeGenerationOutput)
+            result = await structured_model.ainvoke(messages)
+            if isinstance(result, dict):
+                result = MLCodeGenerationOutput.model_validate(result)
+
+            if isinstance(result, MLCodeGenerationOutput):
+                code = self._extract_python_code(result.code)
+                code_title = truncate_words(result.code_title.strip(), max_words=5)
+        except Exception as ex:
+            logger.warning(f"Structured ML code generation failed ({ex}), falling back to direct invoke")
+
+        if not code:
+            resp = await self.chat_model.ainvoke(messages)
+            content = extract_text_from_message_content(resp.content)
+            code = self._extract_python_code(content)
+
+        if not code_title:
+            desc = state.get("task_description", "")
+            task_words = "".join(c for c in desc if c.isalnum() or c.isspace()).split()
+            code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
+        else:
+            code_title = truncate_words(code_title, max_words=5)
+
+        clean_code = code.strip()
 
         return {
             "current_code": clean_code,
+            "code_title": code_title,
         }
 
     async def _execute_code_node(self, state: MLAgentState) -> Dict[str, Any]:
@@ -460,7 +522,6 @@ class MLAgent:
             "code_repair",
             task_description=state.get("task_description", ""),
             dataset_preview=state.get("dataset_preview", ""),
-            output_dir=str(self.output_dir),
             current_code=state.get("current_code", ""),
             error_trace=state.get("error_trace", ""),
             is_multi_dataset=state.get("is_multi_dataset", False),
@@ -473,11 +534,12 @@ class MLAgent:
         resp = await self.chat_model.ainvoke(messages)
         content = extract_text_from_message_content(resp.content)
         fixed_code = self._extract_python_code(content)
-        clean_fixed_code = sanitize_code_comments(fixed_code)
+        clean_fixed_code = fixed_code.strip()
 
         return {
             "current_code": clean_fixed_code,
             "retry_count": current_retries,
+            "code_title": state.get("code_title", ""),
         }
 
     async def _summarize_results_node(self, state: MLAgentState) -> Dict[str, Any]:
@@ -516,6 +578,79 @@ class MLAgent:
             "response": summary_text,
         }
 
+def _is_color_title(val: Any) -> bool:
+    if not isinstance(val, str):
+        return False
+    s = val.strip().lower()
+    if s.startswith("<b>") and s.endswith("</b>"):
+        s = s[3:-4].strip()
+    if s.startswith("<span>") and s.endswith("</span>"):
+        s = s[6:-7].strip()
+    return s in ("color", "colour", "color:", "colour:")
+
+
+def _clean_chart_spec(spec: Dict[str, Any]) -> None:
+    if not isinstance(spec, dict):
+        return
+
+    layout = spec.get("layout")
+    if isinstance(layout, dict):
+        # Clear title inside the Plotly canvas so it is rendered in the external card header only
+        if "title" in layout:
+            if isinstance(layout["title"], dict):
+                layout["title"]["text"] = ""
+            else:
+                layout["title"] = ""
+
+        legend = layout.get("legend")
+        if isinstance(legend, dict):
+            lt = legend.get("title")
+            if isinstance(lt, dict):
+                if _is_color_title(lt.get("text")):
+                    lt["text"] = ""
+            elif _is_color_title(lt):
+                legend["title"] = ""
+
+        if _is_color_title(layout.get("legend_title_text")):
+            layout["legend_title_text"] = ""
+
+        legend_title = layout.get("legend_title")
+        if isinstance(legend_title, dict):
+            if _is_color_title(legend_title.get("text")):
+                legend_title["text"] = ""
+        elif _is_color_title(legend_title):
+            layout["legend_title"] = ""
+
+        template = layout.get("template")
+        if isinstance(template, dict):
+            t_layout = template.get("layout")
+            if isinstance(t_layout, dict):
+                t_legend = t_layout.get("legend")
+                if isinstance(t_legend, dict):
+                    t_lt = t_legend.get("title")
+                    if isinstance(t_lt, dict) and _is_color_title(t_lt.get("text")):
+                        t_lt["text"] = ""
+                    elif _is_color_title(t_lt):
+                        t_legend["title"] = ""
+                if _is_color_title(t_layout.get("legend_title_text")):
+                    t_layout["legend_title_text"] = ""
+
+    data = spec.get("data")
+    if isinstance(data, list):
+        for trace in data:
+            if isinstance(trace, dict):
+                marker = trace.get("marker")
+                if isinstance(marker, dict):
+                    colorbar = marker.get("colorbar")
+                    if isinstance(colorbar, dict):
+                        cb_title = colorbar.get("title")
+                        if isinstance(cb_title, dict) and _is_color_title(cb_title.get("text")):
+                            cb_title["text"] = ""
+                        elif _is_color_title(cb_title):
+                            colorbar["title"] = ""
+
+
+
     def _save_charts_to_db(
         self,
         charts: List[Dict[str, Any]],
@@ -533,15 +668,23 @@ class MLAgent:
             spec = ch.get("spec", {})
             title = ""
             if isinstance(spec, dict):
-                layout_title = spec.get("layout", {}).get("title")
+                layout = spec.get("layout", {})
+                layout_title = layout.get("title")
                 if isinstance(layout_title, dict):
                     title = layout_title.get("text", "")
                 elif isinstance(layout_title, str):
                     title = layout_title
+
+                _clean_chart_spec(spec)
+
+            if title:
+                title = truncate_words(title, max_words=5)
+
             if not title:
                 raw_title = ch.get("file_name", "Plotly Chart").replace(".json", "").replace("_", " ")
-                clean_title = re.sub(r"\b\d{8}[-_]?\d{4,6}\b", "", raw_title).strip()
-                title = clean_title.title() if clean_title else "Plotly Chart"
+                clean_tokens = [t for t in raw_title.split() if not (t.isdigit() or len(t) >= 6 and t.isalnum() and any(c.isdigit() for c in t))]
+                clean_title = " ".join(clean_tokens) if clean_tokens else raw_title
+                title = truncate_words(clean_title.title() if clean_title else "Plotly Chart", max_words=5)
 
             chart_type = "plotly"
             if isinstance(spec, dict) and "data" in spec and isinstance(spec["data"], list) and len(spec["data"]) > 0:
@@ -553,7 +696,7 @@ class MLAgent:
                 with self.engine.begin() as conn:
                     res = conn.execute(
                         text("""
-                            INSERT INTO generated_charts (title, chart_type, spec, dataset_id, session_id)
+                            INSERT INTO internal.generated_charts (title, chart_type, spec, dataset_id, session_id)
                             VALUES (:title, :chart_type, :spec, :dataset_id, :session_id)
                             RETURNING id
                         """),
@@ -581,7 +724,7 @@ class MLAgent:
         session_id: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Persists generated ML Python code into PostgreSQL generated_scripts.
+        Persists generated ML Python code into PostgreSQL internal.generated_scripts.
         """
         if not self.engine or not script.strip():
             return None
@@ -590,7 +733,7 @@ class MLAgent:
             with self.engine.begin() as conn:
                 res = conn.execute(
                     text("""
-                        INSERT INTO generated_scripts (script, language, task_description, dataset_id, session_id)
+                        INSERT INTO internal.generated_scripts (script, language, task_description, dataset_id, session_id)
                         VALUES (:script, 'python', :task_description, :dataset_id, :session_id)
                         RETURNING id
                     """),
@@ -665,6 +808,7 @@ class MLAgent:
             "resolved_path": "",
             "dataset_preview": "",
             "current_code": "",
+            "code_title": "",
             "execution_result": {},
             "error_trace": "",
             "retry_count": 0,
@@ -697,7 +841,19 @@ class MLAgent:
             chart_ids = self._save_charts_to_db(charts, dataset_id=resolved_dataset_id, session_id=resolved_sess_id)
 
             code_script = final_state.get("current_code", "")
-            script_id = self._save_script_to_db(code_script, task_description, dataset_id=resolved_dataset_id, session_id=resolved_sess_id)
+            code_title = final_state.get("code_title")
+            if not code_title:
+                task_words = "".join(c for c in task_description if c.isalnum() or c.isspace()).split()
+                code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
+            else:
+                code_title = truncate_words(code_title, max_words=5)
+
+            script_id = self._save_script_to_db(
+                code_script,
+                task_description=code_title,
+                dataset_id=resolved_dataset_id,
+                session_id=resolved_sess_id,
+            )
 
             metadata = build_domain_metadata(
                 chart_ids=chart_ids,
@@ -705,6 +861,8 @@ class MLAgent:
                 dataset_id=resolved_dataset_id,
                 dataset_ids=resolved_dataset_ids,
                 code=code_script,
+                code_title=code_title,
+                task_description=code_title,
             )
 
             return {

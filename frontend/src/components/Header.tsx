@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bot, PanelLeft } from 'lucide-react';
+import { PanelLeft } from 'lucide-react';
 
 interface HeaderProps {
   isBusy: boolean;
@@ -27,26 +27,10 @@ export const Header: React.FC<HeaderProps> = ({
           <PanelLeft size={16} />
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div
-            style={{
-              width: '24px',
-              height: '24px',
-              borderRadius: 'var(--app-radius)',
-              background: '#f8f9fa',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#212529',
-            }}
-          >
-            <Bot size={15} />
-          </div>
-          <div>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: '#f8f9fa' }}>
-              Multi-Agent Studio
-            </span>
-          </div>
+        <div>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: '#f8f9fa' }}>
+            Multi-Agent Studio
+          </span>
         </div>
       </div>
 

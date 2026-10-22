@@ -7,12 +7,9 @@ Task Description:
 In-Memory Dataset(s):
 {{ dataset_preview }}
 
-Output Directory for Charts:
-{{ output_dir }}
-
 Data Access:
-- The dataset is in memory as a pandas DataFrame (e.g. `data`, or `data_1`, `data_2`).
-- Do NOT read from disk or call pd.read_csv(). Copy from in-memory objects (e.g. `df = data.copy()`).
+- The dataset is in memory as a pandas DataFrame (such as `data`, or `data_1`, `data_2`).
+- Copy from the in-memory variables (for example: `df = data.copy()`) rather than reading from disk.
 
 Failed Python Code:
 ```python
@@ -27,7 +24,9 @@ Execution Error & Traceback:
 Fix Instructions:
 - Identify the root cause of the error from the traceback (column names, types, missing values, or plotting).
 - Fix the error while fulfilling the user's task goal with appropriate ML algorithms.
-- If visualizations are created, save only Plotly JSON specs to '{{ output_dir }}'.
-- Console output: print ONLY substantive metrics and key findings. No generic status messages.
-- DO NOT copy rule titles, prompt instructions, or numbered headers into code comments.
+- Visualizations: Keep each visualization as an independent separate figure saved to its own JSON file, avoiding make_subplots or combined dashboards.
+- Chart titles: Set concise titles (4–5 words maximum).
+- Legend titles: When a legend is present, give it a descriptive title (such as 'Cluster', 'Category', or feature name) or clear it via fig.update_layout(legend_title_text=''), avoiding placeholder labels like 'color'.
+- Console output: Print substantive numerical metrics and key findings, avoiding generic status messages.
+- Do not write any comments in the code. Write clean, self-explanatory code without comments.
 - Provide the complete corrected Python code in a ```python ``` block without surrounding conversational text.

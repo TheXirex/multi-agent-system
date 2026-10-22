@@ -5,7 +5,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 from typing import Any, Dict, List, Optional, Set
 
 import pandas as pd
@@ -13,24 +12,6 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
-PLOTLY_PATTERN = r"<!--\s*PLOTLY_JSON_START\s*-->\s*([\s\S]*?)\s*<!--\s*PLOTLY_JSON_END\s*-->"
-
-
-def sanitize_code_comments(code: str) -> str:
-    """
-    Strips out prompt section headers, rule titles, and meta-comments from Python code.
-    """
-    rule_patterns = [
-        r"^\s*#\s*\d+\.\s*(?:Data Ingestion|Adaptive ML|Visualization|Output|Console|Execution|Requirements).*$",
-        r"^\s*#\s*(?:Output and Console Printing Rules|Visualization Requirements|Adaptive ML Algorithm Selection|Data Ingestion & Preprocessing|Execution Environment).*$",
-        r"^\s*#\s*Requirements for the Python script.*$",
-    ]
-    lines = []
-    for line in code.splitlines():
-        if any(re.match(pat, line, re.IGNORECASE) for pat in rule_patterns):
-            continue
-        lines.append(line)
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 class MLCodeRunner:
@@ -95,7 +76,7 @@ class MLCodeRunner:
         Returns:
             Dict[str, Any]: Execution status, stdout, stderr, clean code, charts, and plots.
         """
-        clean_code = sanitize_code_comments(code)
+        clean_code = code.strip()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         start_time = datetime.now().timestamp()
         script_file = self.scripts_dir / f"ml_run_{timestamp}.py"
@@ -189,41 +170,7 @@ class MLCodeRunner:
                 except Exception as ex:
                     logger.warning(f"Could not parse chart JSON from {jp.name}: {ex}")
 
-            # 2. Fallback: extract Plotly JSON if emitted directly via stdout markers
-            if not charts:
-                for match in re.finditer(PLOTLY_PATTERN, stdout):
-                    spec_str = match.group(1).strip()
-                    try:
-                        spec_content = json.loads(spec_str)
-                        if isinstance(spec_content, dict) and ("data" in spec_content or "layout" in spec_content):
-                            charts.append({
-                                "file_name": "chart.json",
-                                "spec": spec_content,
-                            })
-                    except Exception as ex:
-                        logger.warning(f"Could not parse Plotly chart JSON from stdout: {ex}")
-
-            # 3. Clean stdout by replacing giant JSON blocks and stripping boilerplate phrases
-            clean_stdout = re.sub(
-                PLOTLY_PATTERN,
-                "\n[Interactive Plotly chart returned for database storage]\n",
-                stdout,
-            ).strip()
-
-            boilerplate_patterns = [
-                r"(?i)^\s*task\s+(?:completed|finished|executed)(?:\s+successfully)?\.?\s*$",
-                r"(?i)^\s*script\s+(?:completed|finished|executed)(?:\s+successfully)?\.?\s*$",
-                r"(?i)^\s*(?:starting|running|executing)\s+.*$",
-                r"(?i)^\s*plotly\s+chart\s+successfully\s+saved\s+to:?.*$",
-                r"(?i)^\s*figure\s+saved\s+to:?.*$",
-                r"(?i)^\s*data\s+loaded\s+successfully\.?\s*$",
-                r"(?i)^\s*done\.?\s*$",
-            ]
-            clean_lines = [
-                line for line in clean_stdout.splitlines()
-                if not any(re.match(pat, line) for pat in boilerplate_patterns)
-            ]
-            clean_stdout = re.sub(r"\n{3,}", "\n\n", "\n".join(clean_lines)).strip()
+            clean_stdout = stdout.strip()
 
             success = returncode == 0
             return {

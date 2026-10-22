@@ -11,6 +11,7 @@ interface SidebarProps {
   onNewSession: () => void;
   onRenameSession: (id: string, newTitle: string) => void;
   onDeleteSession: (id: string) => void;
+  isBusy?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -21,6 +22,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onNewSession,
   onRenameSession,
   onDeleteSession,
+  isBusy,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
@@ -68,7 +70,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Top action button */}
       <div style={{ padding: '12px', borderBottom: '1px solid rgba(73, 80, 87, 0.5)' }}>
         <button
-          onClick={onNewSession}
+          onClick={() => {
+            if (isBusy) return;
+            onNewSession();
+          }}
+          disabled={isBusy}
+          title={isBusy ? 'Please wait until current agent task completes' : 'Start a new chat'}
           style={{
             width: '100%',
             padding: '8px 12px',
@@ -78,6 +85,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             fontWeight: 600,
             fontSize: '12px',
             gap: '8px',
+            opacity: isBusy ? 0.45 : 1,
+            cursor: isBusy ? 'not-allowed' : 'pointer',
           }}
         >
           <Plus size={15} />
@@ -128,7 +137,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
             return (
               <div
                 key={s.id}
-                onClick={() => onSelectSession(s.id)}
+                onClick={() => {
+                  if (isBusy) return;
+                  onSelectSession(s.id);
+                }}
+                title={isBusy && !isActive ? 'Session switching is locked while agent is working' : undefined}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -137,7 +150,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   borderRadius: 'var(--app-radius)',
                   backgroundColor: isActive ? 'rgba(73, 80, 87, 0.6)' : 'transparent',
                   border: isActive ? '1px solid #6c757d' : '1px solid transparent',
-                  cursor: 'pointer',
+                  cursor: isBusy ? 'not-allowed' : 'pointer',
+                  opacity: isBusy && !isActive ? 0.5 : 1,
                   transition: 'all 0.15s ease',
                   gap: '6px',
                 }}
@@ -284,26 +298,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </div>
 
             {/* Modal Body */}
-            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ padding: '16px' }}>
               <p style={{ fontSize: '13px', color: '#ced4da', margin: 0, lineHeight: 1.5 }}>
                 Are you sure you want to delete this chat session? This action cannot be undone.
               </p>
-              <div
-                style={{
-                  backgroundColor: '#343a40',
-                  border: '1px solid rgba(108, 117, 125, 0.4)',
-                  padding: '8px 10px',
-                  borderRadius: 'var(--app-radius)',
-                  fontSize: '12px',
-                  fontFamily: 'var(--font-mono)',
-                  color: '#f8f9fa',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {sessionToDelete.title || 'Untitled Session'}
-              </div>
             </div>
 
             {/* Modal Footer */}

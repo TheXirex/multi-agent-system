@@ -7,12 +7,13 @@ class DatabaseInspector:
     Inspects database tables, columns, and relationships to provide schema context.
     """
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, schema: str = "public") -> None:
         self.engine = engine
+        self.schema = schema
 
     def get_table_names(self) -> List[str]:
         """
-        Retrieves all table names present in the default database schema.
+        Retrieves all table names present in the configured database schema (default 'public').
 
         Args:
             None
@@ -21,7 +22,7 @@ class DatabaseInspector:
             List[str]: List of table names found in the database.
         """
         inspector = inspect(self.engine)
-        return inspector.get_table_names()
+        return inspector.get_table_names(schema=self.schema)
 
     def get_schema_summary(self) -> str:
         """
@@ -34,19 +35,19 @@ class DatabaseInspector:
             str: Formatted description of tables, columns, types, and foreign keys.
         """
         inspector = inspect(self.engine)
-        tables = inspector.get_table_names()
+        tables = inspector.get_table_names(schema=self.schema)
 
         if not tables:
-            return "No tables found in the database."
+            return f"No tables found in the '{self.schema}' database schema."
 
-        lines: List[str] = ["Database Schema:"]
+        lines: List[str] = [f"Database Schema ({self.schema}):"]
 
         for table in tables:
             lines.append(f"\nTable: {table}")
-            columns = inspector.get_columns(table)
-            pk_constraint = inspector.get_pk_constraint(table)
+            columns = inspector.get_columns(table, schema=self.schema)
+            pk_constraint = inspector.get_pk_constraint(table, schema=self.schema)
             primary_keys = set(pk_constraint.get("constrained_columns", []))
-            fks = inspector.get_foreign_keys(table)
+            fks = inspector.get_foreign_keys(table, schema=self.schema)
 
             fk_map = {}
             for fk in fks:

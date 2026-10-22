@@ -14,9 +14,14 @@ export interface Attachment {
 
 export interface MessageMetadata {
   dataset_id?: number | null;
+  dataset_ids?: number[];
   chart_id?: number | null;
   chart_ids?: number[];
   script_id?: number | null;
+  code_title?: string | null;
+  task_description?: string | null;
+  table_name?: string | null;
+  sql_description?: string | null;
   attachments?: Attachment[];
   [key: string]: any;
 }

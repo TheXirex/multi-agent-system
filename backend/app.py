@@ -29,15 +29,23 @@ async def lifespan(app: FastAPI):
         engine = get_db()
         with engine.begin() as conn:
             conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS chat_sessions (
+                CREATE SCHEMA IF NOT EXISTS internal;
+
+                ALTER TABLE IF EXISTS public.generated_datasets SET SCHEMA internal;
+                ALTER TABLE IF EXISTS public.generated_charts SET SCHEMA internal;
+                ALTER TABLE IF EXISTS public.generated_scripts SET SCHEMA internal;
+                ALTER TABLE IF EXISTS public.chat_sessions SET SCHEMA internal;
+                ALTER TABLE IF EXISTS public.chat_messages SET SCHEMA internal;
+
+                CREATE TABLE IF NOT EXISTS internal.chat_sessions (
                     id VARCHAR(36) PRIMARY KEY,
                     title VARCHAR(255) NOT NULL DEFAULT 'New Chat',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE TABLE IF NOT EXISTS chat_messages (
+                CREATE TABLE IF NOT EXISTS internal.chat_messages (
                     id SERIAL PRIMARY KEY,
-                    session_id VARCHAR(36) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                    session_id VARCHAR(36) REFERENCES internal.chat_sessions(id) ON DELETE CASCADE,
                     role VARCHAR(20) NOT NULL,
                     content TEXT NOT NULL,
                     metadata JSONB NOT NULL DEFAULT '{}',

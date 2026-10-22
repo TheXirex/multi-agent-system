@@ -57,18 +57,18 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     with engine.begin() as conn:
         if session_id:
             exists = conn.execute(
-                text("SELECT 1 FROM chat_sessions WHERE id = :id"),
+                text("SELECT 1 FROM internal.chat_sessions WHERE id = :id"),
                 {"id": session_id},
             ).scalar()
             if not exists:
                 conn.execute(
-                    text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Chat')"),
+                    text("INSERT INTO internal.chat_sessions (id, title) VALUES (:id, 'New Chat')"),
                     {"id": session_id},
                 )
         else:
             session_id = str(uuid.uuid4())
             conn.execute(
-                text("INSERT INTO chat_sessions (id, title) VALUES (:id, 'New Chat')"),
+                text("INSERT INTO internal.chat_sessions (id, title) VALUES (:id, 'New Chat')"),
                 {"id": session_id},
             )
 
@@ -118,7 +118,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
         rows = conn.execute(
             text("""
                 SELECT role, content, metadata
-                FROM chat_messages
+                FROM internal.chat_messages
                 WHERE session_id = :sid
                 ORDER BY id ASC
             """),
@@ -155,7 +155,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO chat_messages (session_id, role, content, metadata, created_at)
+                INSERT INTO internal.chat_messages (session_id, role, content, metadata, created_at)
                 VALUES (:sid, 'user', :content, :meta, :now)
             """),
             {
@@ -166,7 +166,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
             },
         )
         conn.execute(
-            text("UPDATE chat_sessions SET updated_at = :now WHERE id = :sid"),
+            text("UPDATE internal.chat_sessions SET updated_at = :now WHERE id = :sid"),
             {"sid": session_id, "now": now_user},
         )
 
@@ -210,7 +210,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     with engine.begin() as conn:
         conn.execute(
             text("""
-                INSERT INTO chat_messages (session_id, role, content, metadata, created_at)
+                INSERT INTO internal.chat_messages (session_id, role, content, metadata, created_at)
                 VALUES (:sid, 'assistant', :content, :meta, :now)
             """),
             {
@@ -223,18 +223,18 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
 
         # Automatically update session title if this was the first query
         first_count = conn.execute(
-            text("SELECT COUNT(*) FROM chat_messages WHERE session_id = :sid AND role = 'user'"),
+            text("SELECT COUNT(*) FROM internal.chat_messages WHERE session_id = :sid AND role = 'user'"),
             {"sid": session_id},
         ).scalar()
         if first_count == 1:
             title_sample = truncate_to_nearest_space(effective_query, limit=45)
             conn.execute(
-                text("UPDATE chat_sessions SET title = :title, updated_at = :now WHERE id = :sid"),
+                text("UPDATE internal.chat_sessions SET title = :title, updated_at = :now WHERE id = :sid"),
                 {"sid": session_id, "title": title_sample, "now": now_asst},
             )
         else:
             conn.execute(
-                text("UPDATE chat_sessions SET updated_at = :now WHERE id = :sid"),
+                text("UPDATE internal.chat_sessions SET updated_at = :now WHERE id = :sid"),
                 {"sid": session_id, "now": now_asst},
             )
 

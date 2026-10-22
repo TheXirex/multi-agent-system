@@ -40,27 +40,9 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
         self.output_dir = output_dir or (Path(tempfile.gettempdir()) / "app_temp")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _ensure_tracking_table(self, connection: Any) -> None:
-        """
-        Ensures the generated_datasets tracking table exists in the database.
-        """
-        connection.execute(text("""
-            CREATE TABLE IF NOT EXISTS generated_datasets (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL DEFAULT 'dataset',
-                file_name VARCHAR(255) DEFAULT '',
-                file_path TEXT DEFAULT '',
-                query TEXT,
-                row_count INTEGER DEFAULT 0,
-                columns TEXT[] DEFAULT '{}',
-                data JSONB NOT NULL DEFAULT '[]',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
-
     def execute(self, query: str, filename: Optional[str] = None) -> Dict[str, Any]:
         """
-        Executes the provided SQL query and records the resulting dataset into generated_datasets.
+        Executes the provided SQL query and records the resulting dataset into internal.generated_datasets.
         """
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -70,7 +52,6 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
         try:
             dataset_id = None
             with self.engine.begin() as connection:
-                self._ensure_tracking_table(connection)
                 result = connection.execute(text(query))
                 columns = list(result.keys())
                 raw_rows: List[List[Any]] = [list(row) for row in result.fetchall()]
@@ -86,7 +67,7 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
 
                 record_res = connection.execute(
                     text("""
-                        INSERT INTO generated_datasets (name, file_name, file_path, query, row_count, columns, data)
+                        INSERT INTO internal.generated_datasets (name, file_name, file_path, query, row_count, columns, data)
                         VALUES (:name, :file_name, '', :query, :row_count, :columns, :data)
                         RETURNING id
                     """),

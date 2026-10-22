@@ -29,7 +29,7 @@ async def run_verification():
     
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, name, session_id FROM generated_datasets WHERE id = :id"),
+            text("SELECT id, name, session_id FROM internal.generated_datasets WHERE id = :id"),
             {"id": ds_id_a}
         ).fetchone()
         assert row is not None
@@ -80,7 +80,7 @@ async def run_verification():
         # Verify message stored with attachment metadata
         with engine.connect() as conn:
             user_msg = conn.execute(
-                text("SELECT content, metadata FROM chat_messages WHERE session_id = 'test-session-flow-999' AND role = 'user' ORDER BY id DESC LIMIT 1")
+                text("SELECT content, metadata FROM internal.chat_messages WHERE session_id = 'test-session-flow-999' AND role = 'user' ORDER BY id DESC LIMIT 1")
             ).fetchone()
             assert user_msg is not None
             meta_json = json.loads(user_msg[1]) if isinstance(user_msg[1], str) else user_msg[1]

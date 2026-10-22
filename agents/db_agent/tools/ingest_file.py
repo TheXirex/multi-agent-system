@@ -47,27 +47,6 @@ class IngestTabularFileTool(BaseTool):
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
 
-    def _ensure_tracking_table(self, connection: Any) -> None:
-        """
-        Ensures the generated_datasets table exists in PostgreSQL with session_id support.
-        """
-        connection.execute(text("""
-            CREATE TABLE IF NOT EXISTS generated_datasets (
-                id SERIAL PRIMARY KEY,
-                name VARCHAR(255) NOT NULL DEFAULT 'dataset',
-                file_name VARCHAR(255) DEFAULT '',
-                file_path TEXT DEFAULT '',
-                query TEXT,
-                row_count INTEGER DEFAULT 0,
-                columns TEXT[] DEFAULT '{}',
-                data JSONB NOT NULL DEFAULT '[]',
-                session_id VARCHAR(36),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            ALTER TABLE generated_datasets ADD COLUMN IF NOT EXISTS session_id VARCHAR(36);
-            CREATE INDEX IF NOT EXISTS idx_generated_datasets_session_id ON generated_datasets(session_id);
-        """))
-
     def execute(
         self,
         file_path: Optional[str] = None,
@@ -154,9 +133,10 @@ class IngestTabularFileTool(BaseTool):
                         "metadata": {},
                     }
                 except Exception as csv_err:
+                    logger.warning(f"Failed to parse CSV file '{resolved_filename}': {csv_err}")
                     return {
                         "status": "error",
-                        "error": f"Failed to parse CSV file '{resolved_filename}': {csv_err}",
+                        "error": f"Failed to parse CSV file '{resolved_filename}'. Please ensure the file has a valid format with readable rows and columns.",
                         "metadata": {},
                     }
 
@@ -172,9 +152,10 @@ class IngestTabularFileTool(BaseTool):
                 try:
                     excel = pd.ExcelFile(source_buffer, engine="openpyxl" if ext == ".xlsx" else None)
                 except Exception as xl_err:
+                    logger.warning(f"Failed to read Excel file '{resolved_filename}': {xl_err}")
                     return {
                         "status": "error",
-                        "error": f"Failed to read Excel file '{resolved_filename}': Corrupted or invalid workbook ({xl_err}).",
+                        "error": f"Failed to read Excel file '{resolved_filename}'. The file appears to be corrupted, incomplete, or not a valid Excel spreadsheet.",
                         "metadata": {},
                     }
 
@@ -209,8 +190,6 @@ class IngestTabularFileTool(BaseTool):
         created_datasets: List[Dict[str, Any]] = []
         try:
             with self.engine.begin() as conn:
-                self._ensure_tracking_table(conn)
-
                 for item_name, item_df in sheet_items:
                     item_df.columns = [str(c).strip() for c in item_df.columns]
                     columns_list = list(item_df.columns)
@@ -226,7 +205,7 @@ class IngestTabularFileTool(BaseTool):
 
                     res = conn.execute(
                         text("""
-                            INSERT INTO generated_datasets (name, file_name, file_path, query, row_count, columns, data, session_id)
+                            INSERT INTO internal.generated_datasets (name, file_name, file_path, query, row_count, columns, data, session_id)
                             VALUES (:name, :file_name, '', :query, :row_count, :columns, :data, :session_id)
                             RETURNING id
                         """),

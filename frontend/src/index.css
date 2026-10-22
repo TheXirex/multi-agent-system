@@ -286,6 +286,10 @@ input:focus, textarea:focus, select:focus {
   color: var(--mono-300);
 }
 
+.markdown-body hr {
+  display: none;
+}
+
 /* Syntax Highlighting for Prism (Monochrome Dark) */
 code[class*="language-"],
 pre[class*="language-"] {
@@ -306,12 +310,12 @@ pre[class*="language-"] {
 .token.prolog,
 .token.doctype,
 .token.cdata {
-  color: var(--mono-500);
-  font-style: italic;
+  color: #8b949e !important;
+  font-style: italic !important;
 }
 
 .token.punctuation {
-  color: var(--mono-400);
+  color: #adb5bd !important;
 }
 
 .token.property,
@@ -320,8 +324,7 @@ pre[class*="language-"] {
 .token.number,
 .token.constant,
 .token.symbol {
-  color: var(--mono-50);
-  font-weight: 600;
+  color: #ffab70 !important;
 }
 
 .token.selector,
@@ -329,7 +332,7 @@ pre[class*="language-"] {
 .token.string,
 .token.char,
 .token.builtin {
-  color: var(--mono-300);
+  color: #7ee787 !important;
 }
 
 .token.operator,
@@ -337,24 +340,23 @@ pre[class*="language-"] {
 .token.url,
 .language-css .token.string,
 .style .token.string {
-  color: var(--mono-200);
+  color: #79c0ff !important;
 }
 
 .token.atrule,
 .token.attr-value,
 .token.keyword {
-  color: var(--mono-50);
-  font-weight: bold;
+  color: #ff7b72 !important;
+  font-weight: 600 !important;
 }
 
 .token.function,
 .token.class-name {
-  color: var(--mono-100);
-  font-weight: 600;
+  color: #d2a8ff !important;
 }
 
 .token.regex,
 .token.important,
 .token.variable {
-  color: var(--mono-300);
+  color: #ffa657 !important;
 }

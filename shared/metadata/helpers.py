@@ -1,11 +1,8 @@
-"""
-Metadata consolidation, text extraction, and dynamic step argument resolution helpers.
-"""
 import json
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from shared.metadata.schema import TRACKED_METADATA_KEYS
+from shared.metadata.schema import TRACKED_METADATA_KEYS, truncate_words
 
 logger = logging.getLogger(__name__)
 

@@ -8,41 +8,19 @@ Dataset Preview:
 {{ dataset_preview }}
 
 Evaluation Criteria:
-1. When is the task CLEAR enough to proceed (needs_clarification = false)?
-   - If the task is sufficiently specified (e.g. "Cluster customers by spending", "Predict total price", "Segment products", "Classification of order status", "Analyze distribution of ratings").
-   - If sensible default features or target can be inferred with high confidence from domain conventions.
-   - Do NOT ask questions if a reasonable, high-quality standard approach exists.
+1. When is the task clear enough to proceed (needs_clarification = false)?
+   - If the user specified any task type, model, or objective (e.g. "Cluster customers", "Train a regression model", "Predict spending score", "Classify churn", "Segment products", "Analyze distribution of ratings").
+   - If the dataset has standard structured tabular columns (customer features, orders, prices, quantities, dates).
+   - If sensible default features or a target variable can be inferred or matched to user terms (e.g., "spending score" clearly maps to `total_spending`, `total_amount`, or `spending`; "orders" maps to `total_orders`).
+   - If multiple candidate target columns exist, pick the most logical target, proceed with modeling, and document the choice in the summary.
+   - If a sensible default or recommended option can be determined, adopt it automatically and proceed with needs_clarification = false.
 
-2. When is clarification STRICTLY necessary (needs_clarification = true)?
-   - The user asks for a predictive/supervised model (e.g. "Build a ML model", "Train a classifier") but the dataset contains multiple candidate target columns and NONE was specified or implied.
-   - The user requests modeling on a column or entity that is completely missing from the dataset.
-   - The user's request is contradictory or has multiple diametrically opposed approaches with no clear default.
+2. When is clarification necessary (needs_clarification = true)?
+   - Clarification is reserved for situations where both of the following are true:
+     * Condition A: The dataset structure or columns are unintelligible or missing (such as an empty dataframe or unlabeled arbitrary numbers).
+     * Condition B: The user request gives no indication of what to predict, analyze, or explore (for example, saying only "do something").
+   - Or when the requested task requires data modalities that are completely absent (such as image modeling on text-only tables).
 
 3. If clarification is needed:
-   - Formulate 1 to 3 concise, specific questions in English.
-   - For EACH question, provide a concrete RECOMMENDED option (the best data-science default) and a list of 2-3 options so the user can easily confirm or pick an alternative.
-
-Output Format:
-You must respond with valid JSON only, using this schema:
-```json
-{
-  "needs_clarification": false,
-  "reason": "Task is clear; target is total_amount and features are quantity and price",
-  "questions": []
-}
-```
-Or if clarification is required:
-```json
-{
-  "needs_clarification": true,
-  "reason": "Multiple target variables are available for prediction",
-  "questions": [
-    {
-      "question": "Which target variable would you like to predict?",
-      "recommended": "price (Product Price)",
-      "options": ["price (Product Price)", "rating (Review Rating)", "stock_quantity (Stock on Hand)"]
-    }
-  ]
-}
-```
-Do not include any conversational text outside the JSON code block.
+   - Formulate 1 to 2 concise, specific questions in English.
+   - For each question, provide a recommended option and 2–3 alternatives.

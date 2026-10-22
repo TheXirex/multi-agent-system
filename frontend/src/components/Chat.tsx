@@ -1,9 +1,21 @@
 import React, { useRef, useEffect, useState } from 'react';
 import type { Message } from '../types';
 import { marked } from 'marked';
-import { Bot, Paperclip, Send, User, X, Undo2, FileSpreadsheet, ChevronDown, ChevronRight, Terminal, Code } from 'lucide-react';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-sql';
+import 'prismjs/themes/prism-tomorrow.css';
+import { Paperclip, Send, User, X, Undo2, FileSpreadsheet, ChevronDown, ChevronRight, Terminal, Code } from 'lucide-react';
 import { PlotlyChart } from './PlotlyChart';
 import { CodeViewer } from './CodeViewer';
+
+function cleanMarkdown(content: string): string {
+  if (!content) return '';
+  return content
+    .replace(/<br\s*\/?>/gi, '\n\n')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
 
 interface ChatProps {
   messages: Message[];
@@ -34,11 +46,15 @@ export const Chat: React.FC<ChatProps> = ({
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages and highlight code blocks
   useEffect(() => {
     if (messagesScrollRef.current) {
       messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
     }
+    const timer = setTimeout(() => {
+      Prism.highlightAll();
+    }, 40);
+    return () => clearTimeout(timer);
   }, [messages, isBusy]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -98,21 +114,7 @@ export const Chat: React.FC<ChatProps> = ({
               gap: '12px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <div
-                style={{
-                  width: '24px',
-                  height: '24px',
-                  borderRadius: 'var(--app-radius)',
-                  backgroundColor: '#f8f9fa',
-                  color: '#212529',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <Bot size={15} />
-              </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
               <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8f9fa' }}>
                 Orchestrator Agent
               </span>
@@ -255,21 +257,7 @@ export const Chat: React.FC<ChatProps> = ({
             >
               {/* Header row: Identity + Turn #N jump button */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div
-                    style={{
-                      width: '22px',
-                      height: '22px',
-                      borderRadius: 'var(--app-radius)',
-                      backgroundColor: '#f8f9fa',
-                      color: '#212529',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Bot size={14} />
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
                   <span style={{ fontSize: '12px', fontWeight: 600, color: '#f8f9fa' }}>
                     Orchestrator Agent
                   </span>
@@ -314,7 +302,7 @@ export const Chat: React.FC<ChatProps> = ({
               {/* Markdown content */}
               <div
                 className="markdown-body"
-                dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) as string }}
+                dangerouslySetInnerHTML={{ __html: marked.parse(cleanMarkdown(msg.content)) as string }}
               />
 
               {/* Inline interactive plots preview */}
@@ -352,13 +340,17 @@ export const Chat: React.FC<ChatProps> = ({
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Terminal size={14} color="#adb5bd" />
-                      <span>Generated ML Python Script</span>
+                      <span>{msg.metadata?.code_title || msg.metadata?.task_description || 'Generated ML Python Script'}</span>
                     </div>
                     {expandedCodeCards[`py-${index}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </div>
                   {expandedCodeCards[`py-${index}`] && (
                     <div style={{ padding: '8px', backgroundColor: '#1c1f23' }}>
-                      <CodeViewer code={msg.pythonScript} language="python" title="Python Script" />
+                      <CodeViewer
+                        code={msg.pythonScript}
+                        language="python"
+                        title={msg.metadata?.code_title || msg.metadata?.task_description || 'Machine Learning Python Script'}
+                      />
                     </div>
                   )}
                 </div>
@@ -382,13 +374,25 @@ export const Chat: React.FC<ChatProps> = ({
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <Code size={14} color="#adb5bd" />
-                      <span>Generated SQL Statement</span>
+                      <span>
+                        {msg.metadata?.sql_description ||
+                          msg.datasetData?.name ||
+                          'Executed PostgreSQL Query'}
+                      </span>
                     </div>
                     {expandedCodeCards[`sql-${index}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                   </div>
                   {expandedCodeCards[`sql-${index}`] && (
                     <div style={{ padding: '8px', backgroundColor: '#1c1f23' }}>
-                      <CodeViewer code={msg.sqlQuery} language="sql" title="PostgreSQL Statement" />
+                      <CodeViewer
+                        code={msg.sqlQuery}
+                        language="sql"
+                        title={
+                          msg.metadata?.sql_description ||
+                          msg.datasetData?.name ||
+                          'PostgreSQL Query Statement'
+                        }
+                      />
                     </div>
                   )}
                 </div>

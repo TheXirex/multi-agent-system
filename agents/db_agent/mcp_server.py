@@ -24,21 +24,22 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         name="query_and_analyze_database",
         description=(
             "Analyzes database content according to natural language input, generates and executes SQL query, "
-            "exports result rows to CSV, and returns a structured response containing analysis text, table metadata, "
-            "and SQL code."
+            "saves resulting table with descriptive title in database, persists SQL script in database, "
+            "and returns a structured response containing analysis text and metadata."
         ),
     )
-    def query_and_analyze_database(user_input: str) -> Dict[str, Any]:
+    def query_and_analyze_database(user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Analyzes database content and returns a structured response with metadata.
 
         Args:
             user_input (str): Natural language instruction or analytical question.
+            session_id (Optional[str]): Optional active session ID to bind created resources.
 
         Returns:
-            Dict[str, Any]: Structured dictionary containing response, table metadata (path, rows, cols), and SQL code.
+            Dict[str, Any]: Structured dictionary containing response and metadata.
         """
-        return agent.query_database_and_analyze(user_input)
+        return agent.query_database_and_analyze(user_input, session_id=session_id)
 
     @server.tool(
         name="execute_sql_to_csv",

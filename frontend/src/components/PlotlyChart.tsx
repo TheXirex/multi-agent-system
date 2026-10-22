@@ -7,17 +7,46 @@ interface PlotlyChartProps {
   chartType?: string;
 }
 
-const MONO_PALETTE = [
-  '#f8f9fa',
-  '#ced4da',
-  '#adb5bd',
-  '#6c757d',
-  '#dee2e6',
-  '#e9ecef',
-  '#495057',
-];
+function isRawColorTitle(val: unknown): boolean {
+  if (typeof val !== 'string') return false;
+  let s = val.trim().toLowerCase();
+  if (s.startsWith('<b>') && s.endsWith('</b>')) {
+    s = s.slice(3, -4).trim();
+  }
+  if (s.startsWith('<span>') && s.endsWith('</span>')) {
+    s = s.slice(6, -7).trim();
+  }
+  return s === 'color' || s === 'colour' || s === 'color:' || s === 'colour:';
+}
 
-function sanitizePlotlyMonochrome(spec: Record<string, any>): Record<string, any> {
+function cleanLegendLayout(targetLayout: Record<string, any>) {
+  if (!targetLayout || typeof targetLayout !== 'object') return;
+
+  if (targetLayout.legend && typeof targetLayout.legend === 'object') {
+    const lTitle = targetLayout.legend.title;
+    if (lTitle && typeof lTitle === 'object') {
+      if (isRawColorTitle(lTitle.text)) {
+        lTitle.text = '';
+      }
+    } else if (isRawColorTitle(lTitle)) {
+      targetLayout.legend.title = '';
+    }
+  }
+
+  if (isRawColorTitle(targetLayout.legend_title_text)) {
+    targetLayout.legend_title_text = '';
+  }
+
+  if (targetLayout.legend_title && typeof targetLayout.legend_title === 'object') {
+    if (isRawColorTitle(targetLayout.legend_title.text)) {
+      targetLayout.legend_title.text = '';
+    }
+  } else if (isRawColorTitle(targetLayout.legend_title)) {
+    targetLayout.legend_title = '';
+  }
+}
+
+function sanitizePlotlyLayout(spec: Record<string, any>): Record<string, any> {
   if (!spec || typeof spec !== 'object') return spec;
   const cloned = JSON.parse(JSON.stringify(spec));
 
@@ -26,66 +55,66 @@ function sanitizePlotlyMonochrome(spec: Record<string, any>): Record<string, any
   delete layout.width;
   layout.paper_bgcolor = '#212529';
   layout.plot_bgcolor = '#212529';
-  layout.font = { color: '#f8f9fa', family: 'inherit' };
-  layout.colorway = MONO_PALETTE;
+  layout.font = { color: '#f8f9fa', family: 'inherit', ...(layout.font || {}) };
+
+  cleanLegendLayout(layout);
 
   if (layout.template && typeof layout.template === 'object') {
     const tLayout = layout.template.layout || {};
-    tLayout.colorway = MONO_PALETTE;
     tLayout.paper_bgcolor = '#212529';
     tLayout.plot_bgcolor = '#212529';
-    tLayout.font = { color: '#f8f9fa' };
-  } else {
-    delete layout.template;
+    tLayout.font = { color: '#f8f9fa', ...(tLayout.font || {}) };
+    cleanLegendLayout(tLayout);
   }
 
-  // Adjust axes
-  Object.keys(layout).forEach((k) => {
-    if (k.startsWith('xaxis') || k.startsWith('yaxis')) {
-      const axis = layout[k];
-      if (axis && typeof axis === 'object') {
-        axis.gridcolor = '#343a40';
-        axis.zerolinecolor = '#495057';
-        axis.linecolor = '#495057';
-        axis.tickcolor = '#6c757d';
-        axis.tickfont = { color: '#ced4da' };
-        axis.titlefont = { color: '#f8f9fa' };
-      }
-    }
-  });
-
-  // Adjust traces
-  const traces = cloned.data || [];
-  if (Array.isArray(traces)) {
-    traces.forEach((tr, i) => {
-      if (!tr || typeof tr !== 'object') return;
-      const monoColor = MONO_PALETTE[i % MONO_PALETTE.length];
-
-      if (tr.marker && typeof tr.marker === 'object') {
-        const mc = tr.marker.color;
-        if (!mc || (typeof mc === 'string' && /636efa|1976d2|1f77b4|blue|cyan|indigo|#0000ff/i.test(mc))) {
-          tr.marker.color = monoColor;
+  // Clear uninformative colorbar titles if set to default 'color'
+  if (Array.isArray(cloned.data)) {
+    cloned.data.forEach((trace: any) => {
+      if (trace && typeof trace === 'object' && trace.marker && typeof trace.marker === 'object') {
+        const colorbar = trace.marker.colorbar;
+        if (colorbar && typeof colorbar === 'object') {
+          if (colorbar.title && typeof colorbar.title === 'object') {
+            if (isRawColorTitle(colorbar.title.text)) {
+              colorbar.title.text = '';
+            }
+          } else if (isRawColorTitle(colorbar.title)) {
+            colorbar.title = '';
+          }
         }
-        if (tr.marker.colorscale) {
-          tr.marker.colorscale = 'Greys';
-        }
-      } else if (!tr.marker && ['scatter', 'bar', 'pie'].includes(tr.type)) {
-        tr.marker = { color: monoColor };
-      }
-
-      if (tr.line && typeof tr.line === 'object') {
-        const lc = tr.line.color;
-        if (!lc || (typeof lc === 'string' && /636efa|1976d2|1f77b4|blue|cyan|indigo|#0000ff/i.test(lc))) {
-          tr.line.color = monoColor;
-        }
-      } else if (!tr.line && ['scatter', 'scattergl', 'line'].includes(tr.type)) {
-        tr.line = { color: monoColor };
       }
     });
   }
 
+  // Clear title inside Plotly canvas so it's only rendered above the chart in the UI
+  if (layout.title) {
+    if (typeof layout.title === 'object') {
+      layout.title = { ...layout.title, text: '' };
+    } else {
+      layout.title = '';
+    }
+  }
+  if (!layout.margin) {
+    layout.margin = { t: 24, r: 20, b: 44, l: 48 };
+  } else {
+    layout.margin.t = Math.min(layout.margin.t || 24, 28);
+  }
+
+  // Adjust axes for dark theme readability
+  Object.keys(layout).forEach((k) => {
+    if (k.startsWith('xaxis') || k.startsWith('yaxis')) {
+      const axis = layout[k];
+      if (axis && typeof axis === 'object') {
+        axis.gridcolor = axis.gridcolor || '#343a40';
+        axis.zerolinecolor = axis.zerolinecolor || '#495057';
+        axis.linecolor = axis.linecolor || '#495057';
+        axis.tickcolor = axis.tickcolor || '#6c757d';
+        axis.tickfont = { color: '#ced4da', ...(axis.tickfont || {}) };
+        axis.titlefont = { color: '#f8f9fa', ...(axis.titlefont || {}) };
+      }
+    }
+  });
+
   cloned.layout = layout;
-  cloned.data = traces;
   return cloned;
 }
 
@@ -94,7 +123,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const sanitized = sanitizePlotlyMonochrome(spec);
+    const sanitized = sanitizePlotlyLayout(spec);
     const data = sanitized.data || [];
     const layout = sanitized.layout || {};
     const config = { responsive: true, displayModeBar: false, ...(sanitized.config || {}) };
@@ -116,6 +145,15 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType
       }
     };
   }, [spec]);
+
+  const layoutTitle = spec?.layout?.title;
+  const specTitle =
+    typeof layoutTitle === 'object'
+      ? layoutTitle?.text
+      : typeof layoutTitle === 'string'
+      ? layoutTitle
+      : null;
+  const displayTitle = title || specTitle || 'Interactive Visualization';
 
   return (
     <div
@@ -145,7 +183,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType
             maxWidth: '75%',
           }}
         >
-          {title || 'Interactive Visualization'}
+          {displayTitle}
         </span>
         <span className="badge">{(chartType || 'PLOTLY').toUpperCase()}</span>
       </div>

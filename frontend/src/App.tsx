@@ -328,9 +328,10 @@ export function App() {
       setSessions(updatedSessions);
     } catch (err: any) {
       console.error('Query execution error:', err);
+      const cleanError = api.formatHumanReadableError(err);
       const errorMsg: Message = {
         role: 'assistant',
-        content: `### Execution Error\n\n\`\`\`\n${err?.message || err}\n\`\`\``,
+        content: cleanError,
       };
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
@@ -350,10 +351,14 @@ export function App() {
           isOpen={isSidebarOpen}
           sessions={sessions}
           activeSessionId={currentSessionId}
-          onSelectSession={loadSession}
+          onSelectSession={(id) => {
+            if (isBusy) return;
+            loadSession(id);
+          }}
           onNewSession={handleNewSession}
           onRenameSession={handleSidebarRename}
           onDeleteSession={handleDeleteSession}
+          isBusy={isBusy}
         />
 
         <div className="studio-grid">

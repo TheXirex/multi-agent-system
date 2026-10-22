@@ -65,6 +65,64 @@ export async function deleteSession(sessionId: string): Promise<boolean> {
   }
 }
 
+export async function extractErrorMessage(res: Response, fallback: string): Promise<string> {
+  try {
+    const data = await res.json();
+    if (data && typeof data === 'object') {
+      if (typeof data.detail === 'string') return data.detail;
+      if (typeof data.detail === 'object' && data.detail !== null) {
+        if (typeof data.detail.message === 'string') return data.detail.message;
+        if (typeof data.detail.error === 'string') return data.detail.error;
+        return JSON.stringify(data.detail);
+      }
+      if (typeof data.message === 'string') return data.message;
+      if (typeof data.error === 'string') return data.error;
+    }
+    return JSON.stringify(data);
+  } catch {
+    try {
+      const text = await res.text();
+      return text || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+export function formatHumanReadableError(err: any): string {
+  let raw = err?.message || (typeof err === 'string' ? err : '');
+  if (!raw && err) {
+    try {
+      raw = String(err);
+    } catch {
+      raw = 'An unexpected error occurred.';
+    }
+  }
+
+  // Parse if raw string is JSON like {"detail": "..."}
+  if (raw && (raw.startsWith('{') || raw.startsWith('['))) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.detail === 'string') {
+          raw = parsed.detail;
+        } else if (typeof parsed.detail === 'object' && parsed.detail !== null) {
+          raw = parsed.detail.message || parsed.detail.error || JSON.stringify(parsed.detail);
+        } else if (typeof parsed.message === 'string') {
+          raw = parsed.message;
+        } else if (typeof parsed.error === 'string') {
+          raw = parsed.error;
+        }
+      }
+    } catch {
+      // Continue with raw string
+    }
+  }
+
+  raw = raw.replace(/^Error:\s*/i, '').trim();
+  return raw || 'An unexpected error occurred while processing your request. Please try again.';
+}
+
 export async function sendQuery(
   query: string,
   sessionId?: string,
@@ -82,8 +140,8 @@ export async function sendQuery(
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText || `Query failed with status ${res.status}`);
+    const errorMsg = await extractErrorMessage(res, `Query failed with status ${res.status}`);
+    throw new Error(errorMsg);
   }
 
   return await res.json();
@@ -105,8 +163,8 @@ export async function uploadFile(
   });
 
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(errText || `File upload failed with status ${res.status}`);
+    const errorMsg = await extractErrorMessage(res, `File upload failed with status ${res.status}`);
+    throw new Error(errorMsg);
   }
 
   return await res.json();

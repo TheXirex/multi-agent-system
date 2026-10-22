@@ -9,6 +9,7 @@ from shared.metadata.helpers import (
 from shared.metadata.schema import (
     TRACKED_METADATA_KEYS,
     build_domain_metadata,
+    truncate_words,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "consolidate_metadata",
     "extract_tool_text",
     "resolve_tool_arguments",
+    "truncate_words",
 ]

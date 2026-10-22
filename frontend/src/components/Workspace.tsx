@@ -514,14 +514,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                   <CodeViewer
                     code={activeTurn.pythonScript}
                     language="python"
-                    title="Machine Learning Python Script"
+                    title={
+                      activeTurn.metadata?.code_title ||
+                      activeTurn.metadata?.task_description ||
+                      "Machine Learning Python Script"
+                    }
                   />
                 )}
                 {activeTurn?.sqlQuery && (
                   <CodeViewer
                     code={activeTurn.sqlQuery}
                     language="sql"
-                    title="PostgreSQL Query Statement"
+                    title={
+                      activeTurn.metadata?.sql_description ||
+                      activeTurn.datasetData?.name ||
+                      "PostgreSQL Query Statement"
+                    }
                   />
                 )}
               </div>

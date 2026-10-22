@@ -64,7 +64,7 @@ async def upload_file(
         with engine.begin() as conn:
             conn.execute(
                 text("""
-                    INSERT INTO chat_messages (session_id, role, content, metadata, created_at)
+                    INSERT INTO internal.chat_messages (session_id, role, content, metadata, created_at)
                     VALUES (:sid, 'assistant', :content, :meta, :now)
                 """),
                 {
@@ -79,7 +79,7 @@ async def upload_file(
                 },
             )
             conn.execute(
-                text("UPDATE chat_sessions SET updated_at = :now WHERE id = :sid"),
+                text("UPDATE internal.chat_sessions SET updated_at = :now WHERE id = :sid"),
                 {"sid": session_id, "now": now},
             )
 

@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS order_items (
     unit_price NUMERIC(10, 2) NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS generated_datasets (
+CREATE SCHEMA IF NOT EXISTS internal;
+
+CREATE TABLE IF NOT EXISTS internal.generated_datasets (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL DEFAULT 'dataset',
     file_name VARCHAR(255) DEFAULT '',
@@ -44,39 +46,46 @@ CREATE TABLE IF NOT EXISTS generated_datasets (
     row_count INTEGER DEFAULT 0,
     columns TEXT[] DEFAULT '{}',
     data JSONB NOT NULL DEFAULT '[]',
+    session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_generated_datasets_session_id ON internal.generated_datasets(session_id);
 
-CREATE TABLE IF NOT EXISTS generated_charts (
+CREATE TABLE IF NOT EXISTS internal.generated_charts (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255),
     chart_type VARCHAR(50),
     spec JSONB NOT NULL,
-    dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
+    dataset_id INTEGER REFERENCES internal.generated_datasets(id) ON DELETE SET NULL,
+    session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_generated_charts_session_id ON internal.generated_charts(session_id);
 
-CREATE TABLE IF NOT EXISTS generated_scripts (
+CREATE TABLE IF NOT EXISTS internal.generated_scripts (
     id SERIAL PRIMARY KEY,
     script TEXT NOT NULL,
     language VARCHAR(50) DEFAULT 'python',
     task_description TEXT,
-    dataset_id INTEGER REFERENCES generated_datasets(id) ON DELETE SET NULL,
+    dataset_id INTEGER REFERENCES internal.generated_datasets(id) ON DELETE SET NULL,
+    session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE INDEX IF NOT EXISTS idx_generated_scripts_session_id ON internal.generated_scripts(session_id);
 
-CREATE TABLE IF NOT EXISTS chat_sessions (
+CREATE TABLE IF NOT EXISTS internal.chat_sessions (
     id VARCHAR(36) PRIMARY KEY,
-    title VARCHAR(255) NOT NULL DEFAULT 'New Session',
+    title VARCHAR(255) NOT NULL DEFAULT 'New Chat',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS chat_messages (
+CREATE TABLE IF NOT EXISTS internal.chat_messages (
     id SERIAL PRIMARY KEY,
-    session_id VARCHAR(36) REFERENCES chat_sessions(id) ON DELETE CASCADE,
+    session_id VARCHAR(36) REFERENCES internal.chat_sessions(id) ON DELETE CASCADE,
     role VARCHAR(20) NOT NULL,
     content TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+

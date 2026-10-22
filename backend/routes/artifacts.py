@@ -47,7 +47,7 @@ async def get_dataset(dataset_id: int) -> Dict[str, Any]:
     engine = get_db()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, name, file_name, file_path, query, row_count, columns, data, created_at FROM generated_datasets WHERE id = :id"),
+            text("SELECT id, name, file_name, file_path, query, row_count, columns, data, created_at FROM internal.generated_datasets WHERE id = :id"),
             {"id": dataset_id},
         ).fetchone()
 
@@ -96,7 +96,7 @@ async def get_chart(chart_id: int) -> Dict[str, Any]:
     engine = get_db()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, title, chart_type, spec, dataset_id, created_at FROM generated_charts WHERE id = :id"),
+            text("SELECT id, title, chart_type, spec, dataset_id, created_at FROM internal.generated_charts WHERE id = :id"),
             {"id": chart_id},
         ).fetchone()
 
@@ -109,6 +109,36 @@ async def get_chart(chart_id: int) -> Dict[str, Any]:
             spec_data = json.loads(spec_data)
         except Exception:
             pass
+
+    if isinstance(spec_data, dict):
+        layout = spec_data.get("layout")
+        if isinstance(layout, dict):
+            def _is_color_str(val: Any) -> bool:
+                if not isinstance(val, str):
+                    return False
+                s = val.strip().lower()
+                if s.startswith("<b>") and s.endswith("</b>"):
+                    s = s[3:-4].strip()
+                if s.startswith("<span>") and s.endswith("</span>"):
+                    s = s[6:-7].strip()
+                return s in ("color", "colour", "color:", "colour:")
+
+            legend = layout.get("legend")
+            if isinstance(legend, dict):
+                lt = legend.get("title")
+                if isinstance(lt, dict) and _is_color_str(lt.get("text")):
+                    lt["text"] = ""
+                elif _is_color_str(lt):
+                    legend["title"] = ""
+
+            if _is_color_str(layout.get("legend_title_text")):
+                layout["legend_title_text"] = ""
+
+            lt_top = layout.get("legend_title")
+            if isinstance(lt_top, dict) and _is_color_str(lt_top.get("text")):
+                lt_top["text"] = ""
+            elif _is_color_str(lt_top):
+                layout["legend_title"] = ""
 
     return {
         "id": row[0],
@@ -128,7 +158,7 @@ async def get_script(script_id: int) -> Dict[str, Any]:
     engine = get_db()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, script, language, task_description, dataset_id, created_at FROM generated_scripts WHERE id = :id"),
+            text("SELECT id, script, language, task_description, dataset_id, created_at FROM internal.generated_scripts WHERE id = :id"),
             {"id": script_id},
         ).fetchone()
 

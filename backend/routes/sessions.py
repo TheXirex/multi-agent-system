@@ -32,9 +32,9 @@ async def list_sessions() -> List[SessionSummary]:
         rows = conn.execute(text("""
             SELECT s.id, s.title, s.created_at, s.updated_at,
                    COUNT(m.id) as message_count,
-                   (SELECT content FROM chat_messages WHERE session_id = s.id ORDER BY id DESC LIMIT 1) as last_msg
-            FROM chat_sessions s
-            LEFT JOIN chat_messages m ON s.id = m.session_id
+                   (SELECT content FROM internal.chat_messages WHERE session_id = s.id ORDER BY id DESC LIMIT 1) as last_msg
+            FROM internal.chat_sessions s
+            LEFT JOIN internal.chat_messages m ON s.id = m.session_id
             GROUP BY s.id, s.title, s.created_at, s.updated_at
             ORDER BY s.updated_at DESC
         """)).fetchall()
@@ -64,7 +64,7 @@ async def create_session(req: Optional[CreateSessionRequest] = None) -> SessionS
     now = datetime.now()
     with engine.begin() as conn:
         conn.execute(
-            text("INSERT INTO chat_sessions (id, title, created_at, updated_at) VALUES (:id, :title, :now, :now)"),
+            text("INSERT INTO internal.chat_sessions (id, title, created_at, updated_at) VALUES (:id, :title, :now, :now)"),
             {"id": new_id, "title": title, "now": now},
         )
     return SessionSummary(
@@ -85,7 +85,7 @@ async def get_session(session_id: str) -> SessionDetail:
     engine = get_db()
     with engine.connect() as conn:
         s_row = conn.execute(
-            text("SELECT id, title, created_at, updated_at FROM chat_sessions WHERE id = :id"),
+            text("SELECT id, title, created_at, updated_at FROM internal.chat_sessions WHERE id = :id"),
             {"id": session_id},
         ).fetchone()
 
@@ -93,7 +93,7 @@ async def get_session(session_id: str) -> SessionDetail:
             raise HTTPException(status_code=404, detail="Session not found")
 
         m_rows = conn.execute(
-            text("SELECT id, session_id, role, content, metadata, created_at FROM chat_messages WHERE session_id = :id ORDER BY id ASC"),
+            text("SELECT id, session_id, role, content, metadata, created_at FROM internal.chat_messages WHERE session_id = :id ORDER BY id ASC"),
             {"id": session_id},
         ).fetchall()
 
@@ -136,7 +136,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
     engine = get_db()
     with engine.begin() as conn:
         conn.execute(
-            text("DELETE FROM chat_sessions WHERE id = :id"),
+            text("DELETE FROM internal.chat_sessions WHERE id = :id"),
             {"id": session_id},
         )
     return {"status": "deleted", "session_id": session_id}
@@ -154,7 +154,7 @@ async def update_session_title(session_id: str, req: UpdateSessionRequest) -> Di
     engine = get_db()
     with engine.begin() as conn:
         conn.execute(
-            text("UPDATE chat_sessions SET title = :title, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+            text("UPDATE internal.chat_sessions SET title = :title, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
             {"id": session_id, "title": new_title},
         )
     return {"status": "updated", "session_id": session_id, "title": new_title}
