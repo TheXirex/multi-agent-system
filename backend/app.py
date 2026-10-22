@@ -31,11 +31,34 @@ async def lifespan(app: FastAPI):
             conn.execute(text("""
                 CREATE SCHEMA IF NOT EXISTS internal;
 
-                ALTER TABLE IF EXISTS public.generated_datasets SET SCHEMA internal;
+                DROP TABLE IF EXISTS public.generated_datasets CASCADE;
+                ALTER TABLE IF EXISTS internal.generated_datasets RENAME TO user_datasets;
+                ALTER INDEX IF EXISTS internal.idx_generated_datasets_session_id RENAME TO idx_user_datasets_session_id;
+                ALTER INDEX IF EXISTS internal.generated_datasets_pkey RENAME TO user_datasets_pkey;
+                ALTER SEQUENCE IF EXISTS internal.generated_datasets_id_seq RENAME TO user_datasets_id_seq;
+
                 ALTER TABLE IF EXISTS public.generated_charts SET SCHEMA internal;
                 ALTER TABLE IF EXISTS public.generated_scripts SET SCHEMA internal;
                 ALTER TABLE IF EXISTS public.chat_sessions SET SCHEMA internal;
                 ALTER TABLE IF EXISTS public.chat_messages SET SCHEMA internal;
+
+                CREATE TABLE IF NOT EXISTS internal.user_datasets (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL DEFAULT 'dataset',
+                    file_name VARCHAR(255) DEFAULT '',
+                    file_path TEXT DEFAULT '',
+                    query TEXT,
+                    row_count INTEGER DEFAULT 0,
+                    columns TEXT[] DEFAULT '{}',
+                    data JSONB NOT NULL DEFAULT '[]',
+                    session_id VARCHAR(36),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_datasets_session_id ON internal.user_datasets(session_id);
+
+                CREATE OR REPLACE VIEW public.user_datasets AS
+                SELECT id, name, file_name, file_path, query, row_count, columns, data, session_id, created_at
+                FROM internal.user_datasets;
 
                 CREATE TABLE IF NOT EXISTS internal.chat_sessions (
                     id VARCHAR(36) PRIMARY KEY,

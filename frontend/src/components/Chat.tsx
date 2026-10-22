@@ -5,17 +5,10 @@ import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-sql';
 import 'prismjs/themes/prism-tomorrow.css';
-import { Paperclip, Send, User, X, Undo2, FileSpreadsheet, ChevronDown, ChevronRight, Terminal, Code } from 'lucide-react';
+import { Paperclip, Send, User, X, ArrowRightToLine, FileSpreadsheet, ChevronDown, ChevronRight, Terminal, Code } from 'lucide-react';
 import { PlotlyChart } from './PlotlyChart';
 import { CodeViewer } from './CodeViewer';
-
-function cleanMarkdown(content: string): string {
-  if (!content) return '';
-  return content
-    .replace(/<br\s*\/?>/gi, '\n\n')
-    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
-    .replace(/\n{3,}/g, '\n\n');
-}
+import { FileAttachModal } from './FileAttachModal';
 
 interface ChatProps {
   messages: Message[];
@@ -23,6 +16,7 @@ interface ChatProps {
   onSendQuery: (text: string, attachedFile?: File | null) => Promise<void>;
   onSelectTurn: (turnIndex: number) => void;
   currentTurnIndex?: number;
+  turnsCount?: number;
 }
 
 const DEFAULT_SUGGESTIONS = [
@@ -38,13 +32,21 @@ export const Chat: React.FC<ChatProps> = ({
   onSendQuery,
   onSelectTurn,
   currentTurnIndex,
+  turnsCount,
 }) => {
   const [inputText, setInputText] = useState('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
+  const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
   const [expandedCodeCards, setExpandedCodeCards] = useState<Record<string, boolean>>({});
 
   const messagesScrollRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Only show the version restore arrow when there are 2 or more orchestrator states
+  const orchestratorStatesCount =
+    typeof turnsCount === 'number'
+      ? turnsCount
+      : messages.filter((m) => m.role === 'assistant' && typeof m.turnIndex === 'number').length;
+  const showTurnArrow = orchestratorStatesCount >= 2;
 
   // Auto-scroll to bottom on new messages and highlight code blocks
   useEffect(() => {
@@ -75,14 +77,6 @@ export const Chat: React.FC<ChatProps> = ({
     await onSendQuery(text, fileToSend);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setPendingFile(e.target.files[0]);
-    }
-    // reset input
-    e.target.value = '';
-  };
-
   const toggleExpand = (cardKey: string) => {
     setExpandedCodeCards((prev) => ({ ...prev, [cardKey]: !prev[cardKey] }));
   };
@@ -92,6 +86,7 @@ export const Chat: React.FC<ChatProps> = ({
       {/* 1. Chat Message Stream */}
       <div
         ref={messagesScrollRef}
+        className="scroll-auto-hide"
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -101,73 +96,76 @@ export const Chat: React.FC<ChatProps> = ({
           gap: '16px',
         }}
       >
-        {/* Welcome message if no conversation yet */}
-        {messages.length === 0 && (
-          <div
-            style={{
-              backgroundColor: 'rgba(52, 58, 64, 0.8)',
-              border: '1px solid rgba(73, 80, 87, 0.7)',
-              borderRadius: 'var(--app-radius)',
-              padding: '16px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8f9fa' }}>
-                Orchestrator Agent
-              </span>
-            </div>
+        {/* Welcome card always present at the beginning of the conversation */}
+        <div
+          style={{
+            backgroundColor: 'rgba(52, 58, 64, 0.8)',
+            border: '1px solid rgba(73, 80, 87, 0.7)',
+            borderRadius: 'var(--app-radius)',
+            padding: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8f9fa' }}>
+              Orchestrator Agent
+            </span>
+          </div>
 
-            <div style={{ color: '#dee2e6', fontSize: '13px', lineHeight: 1.6 }}>
-              <p style={{ fontWeight: 600, color: '#f8f9fa', marginBottom: '8px' }}>
-                Welcome to the Multi-Agent Studio!
-              </p>
-              <p style={{ color: '#ced4da', marginBottom: '8px' }}>
-                I am the <strong>AI Orchestrator</strong>, coordinating domain agents to analyze data, execute SQL queries, and build machine learning workflows:
-              </p>
-              <ul style={{ paddingLeft: '20px', color: '#ced4da', marginBottom: '8px' }}>
-                <li>📊 <strong>Database Agent</strong>: Inspects schemas, executes queries, and manages tables.</li>
-                <li>🤖 <strong>Machine Learning Agent</strong>: Trains models and generates interactive Plotly visualizations.</li>
-                <li>📁 <strong>Custom Datasets</strong>: Attach your own <code>.csv</code> or <code>.xlsx</code> files below to bind them to this session.</li>
-              </ul>
-              <p style={{ color: '#adb5bd', fontSize: '12px' }}>
-                Select a suggested prompt below to start immediately:
-              </p>
-            </div>
+          <div style={{ color: '#dee2e6', fontSize: '13px', lineHeight: 1.6 }}>
+            <p style={{ fontWeight: 600, color: '#f8f9fa', marginBottom: '8px' }}>
+              Welcome to the Multi-Agent Studio!
+            </p>
+            <p style={{ color: '#ced4da', marginBottom: '8px' }}>
+              I am the <strong>AI Orchestrator</strong>, coordinating domain agents to analyze data, execute SQL queries, and build machine learning workflows:
+            </p>
+            <ul style={{ paddingLeft: '20px', color: '#ced4da', marginBottom: '8px' }}>
+              <li>📊 <strong>Database Agent</strong>: Inspects schemas, executes queries, and manages tables.</li>
+              <li>🤖 <strong>Machine Learning Agent</strong>: Trains models and generates interactive Plotly visualizations.</li>
+              <li>📁 <strong>Custom Datasets</strong>: Attach your own <code>.csv</code> or <code>.xlsx</code> files below to bind them to this session.</li>
+            </ul>
+            <p style={{ color: '#adb5bd', fontSize: '12px' }}>
+              Select a suggested prompt below to start immediately:
+            </p>
+          </div>
 
-            {/* Suggested prompts list */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              {DEFAULT_SUGGESTIONS.map((prompt, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => onSendQuery(prompt)}
-                  style={{
-                    padding: '8px 12px',
-                    borderRadius: 'var(--app-radius)',
-                    backgroundColor: 'rgba(33, 37, 41, 0.9)',
-                    border: '1px solid rgba(73, 80, 87, 0.6)',
-                    color: '#ced4da',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onMouseEnter={(e) => {
+          {/* Suggested prompts list */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {DEFAULT_SUGGESTIONS.map((prompt, idx) => (
+              <div
+                key={idx}
+                onClick={() => {
+                  if (isBusy) return;
+                  onSendQuery(prompt);
+                }}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 'var(--app-radius)',
+                  backgroundColor: 'rgba(33, 37, 41, 0.9)',
+                  border: '1px solid rgba(73, 80, 87, 0.6)',
+                  color: '#ced4da',
+                  fontSize: '12px',
+                  cursor: isBusy ? 'not-allowed' : 'pointer',
+                  transition: 'all 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isBusy) {
                     e.currentTarget.style.borderColor = '#adb5bd';
                     e.currentTarget.style.color = '#f8f9fa';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'rgba(73, 80, 87, 0.6)';
-                    e.currentTarget.style.color = '#ced4da';
-                  }}
-                >
-                  {prompt}
-                </div>
-              ))}
-            </div>
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(73, 80, 87, 0.6)';
+                  e.currentTarget.style.color = '#ced4da';
+                }}
+              >
+                {prompt}
+              </div>
+            ))}
           </div>
-        )}
+        </div>
 
         {/* Message bubbles */}
         {messages.map((msg, index) => {
@@ -263,11 +261,10 @@ export const Chat: React.FC<ChatProps> = ({
                   </span>
                 </div>
 
-                {msg.turnIndex && (
+                {msg.turnIndex && showTurnArrow && (
                   <button
                     onClick={() => onSelectTurn(msg.turnIndex!)}
-                    title={`Restore workspace widgets to Turn #${msg.turnIndex}`}
-                    aria-label={`Restore workspace widgets to Turn #${msg.turnIndex}`}
+                    aria-label={`Open Turn #${msg.turnIndex} in workspace`}
                     style={{
                       width: '24px',
                       height: '24px',
@@ -280,21 +277,9 @@ export const Chat: React.FC<ChatProps> = ({
                       color: currentTurnIndex === msg.turnIndex ? '#f8f9fa' : '#ced4da',
                       borderRadius: 'var(--app-radius)',
                       cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.color = '#f8f9fa';
-                      e.currentTarget.style.backgroundColor = '#343a40';
-                      e.currentTarget.style.borderColor = '#adb5bd';
-                    }}
-                    onMouseLeave={(e) => {
-                      const isActive = currentTurnIndex === msg.turnIndex;
-                      e.currentTarget.style.color = isActive ? '#f8f9fa' : '#ced4da';
-                      e.currentTarget.style.backgroundColor = isActive ? '#343a40' : '#212529';
-                      e.currentTarget.style.borderColor = isActive ? '1px solid #adb5bd' : '1px solid #495057';
                     }}
                   >
-                    <Undo2 size={13} />
+                    <ArrowRightToLine size={13} />
                   </button>
                 )}
               </div>
@@ -302,7 +287,7 @@ export const Chat: React.FC<ChatProps> = ({
               {/* Markdown content */}
               <div
                 className="markdown-body"
-                dangerouslySetInnerHTML={{ __html: marked.parse(cleanMarkdown(msg.content)) as string }}
+                dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '') as string }}
               />
 
               {/* Inline interactive plots preview */}
@@ -475,16 +460,9 @@ export const Chat: React.FC<ChatProps> = ({
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {/* File attach button */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileChange}
-            accept=".csv,.xlsx,.xls"
-            style={{ display: 'none' }}
-          />
           <button
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach CSV or Excel file (.csv, .xlsx)"
+            onClick={() => setIsAttachModalOpen(true)}
+            aria-label="Attach dataset file"
             disabled={isBusy}
             style={{
               width: '38px',
@@ -494,8 +472,6 @@ export const Chat: React.FC<ChatProps> = ({
               color: '#ced4da',
               flexShrink: 0,
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = '#f8f9fa')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = '#ced4da')}
           >
             <Paperclip size={16} />
           </button>
@@ -538,6 +514,13 @@ export const Chat: React.FC<ChatProps> = ({
           </button>
         </div>
       </div>
+
+      <FileAttachModal
+        isOpen={isAttachModalOpen}
+        onClose={() => setIsAttachModalOpen(false)}
+        onSelectFile={(file) => setPendingFile(file)}
+        currentFile={pendingFile}
+      />
 
       <style>{`
         @keyframes spin {

@@ -29,7 +29,7 @@ async def run_verification():
     
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, name, session_id FROM internal.generated_datasets WHERE id = :id"),
+            text("SELECT id, name, session_id FROM internal.user_datasets WHERE id = :id"),
             {"id": ds_id_a}
         ).fetchone()
         assert row is not None

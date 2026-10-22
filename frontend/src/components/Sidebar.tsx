@@ -75,7 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onNewSession();
           }}
           disabled={isBusy}
-          title={isBusy ? 'Please wait until current agent task completes' : 'Start a new chat'}
+          aria-label="Start a new chat"
           style={{
             width: '100%',
             padding: '8px 12px',

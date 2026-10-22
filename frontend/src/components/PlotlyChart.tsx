@@ -118,7 +118,7 @@ function sanitizePlotlyLayout(spec: Record<string, any>): Record<string, any> {
   return cloned;
 }
 
-export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType }) => {
+export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -170,7 +170,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType
         overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
         <span
           style={{
             fontSize: '12px',
@@ -180,12 +180,11 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({ spec, title, chartType
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
-            maxWidth: '75%',
+            maxWidth: '100%',
           }}
         >
           {displayTitle}
         </span>
-        <span className="badge">{(chartType || 'PLOTLY').toUpperCase()}</span>
       </div>
       <div ref={containerRef} style={{ width: '100%', minHeight: '380px' }} />
     </div>

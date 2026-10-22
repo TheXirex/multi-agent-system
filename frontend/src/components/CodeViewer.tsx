@@ -92,9 +92,9 @@ export const CodeViewer: React.FC<CodeViewerProps> = ({ code, language, title })
           </button>
         </div>
       </div>
-      <div style={{ width: '100%', overflowX: 'auto', maxHeight: '450px' }}>
+      <div className="scroll-auto-hide" style={{ width: '100%', overflowX: 'auto', maxHeight: '450px' }}>
         <pre
-          className={`language-${language}`}
+          className={`language-${language} scroll-auto-hide`}
           style={{
             margin: 0,
             padding: '12px',

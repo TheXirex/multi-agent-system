@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 CREATE SCHEMA IF NOT EXISTS internal;
 
-CREATE TABLE IF NOT EXISTS internal.generated_datasets (
+CREATE TABLE IF NOT EXISTS internal.user_datasets (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL DEFAULT 'dataset',
     file_name VARCHAR(255) DEFAULT '',
@@ -49,14 +49,14 @@ CREATE TABLE IF NOT EXISTS internal.generated_datasets (
     session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_generated_datasets_session_id ON internal.generated_datasets(session_id);
+CREATE INDEX IF NOT EXISTS idx_user_datasets_session_id ON internal.user_datasets(session_id);
 
 CREATE TABLE IF NOT EXISTS internal.generated_charts (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255),
     chart_type VARCHAR(50),
     spec JSONB NOT NULL,
-    dataset_id INTEGER REFERENCES internal.generated_datasets(id) ON DELETE SET NULL,
+    dataset_id INTEGER REFERENCES internal.user_datasets(id) ON DELETE SET NULL,
     session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS internal.generated_scripts (
     script TEXT NOT NULL,
     language VARCHAR(50) DEFAULT 'python',
     task_description TEXT,
-    dataset_id INTEGER REFERENCES internal.generated_datasets(id) ON DELETE SET NULL,
+    dataset_id INTEGER REFERENCES internal.user_datasets(id) ON DELETE SET NULL,
     session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -88,4 +88,8 @@ CREATE TABLE IF NOT EXISTS internal.chat_messages (
     metadata JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE OR REPLACE VIEW public.user_datasets AS
+SELECT id, name, file_name, file_path, query, row_count, columns, data, session_id, created_at
+FROM internal.user_datasets;
 

@@ -16,12 +16,13 @@ export const Header: React.FC<HeaderProps> = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         <button
           onClick={onToggleSidebar}
-          title="Toggle session history sidebar"
+          aria-label="Toggle session history sidebar"
           style={{
             padding: '6px',
             color: '#ced4da',
             background: '#343a40',
             border: '1px solid #495057',
+            cursor: 'pointer',
           }}
         >
           <PanelLeft size={16} />

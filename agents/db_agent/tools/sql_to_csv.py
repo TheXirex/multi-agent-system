@@ -42,7 +42,7 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
 
     def execute(self, query: str, filename: Optional[str] = None) -> Dict[str, Any]:
         """
-        Executes the provided SQL query and records the resulting dataset into internal.generated_datasets.
+        Executes the provided SQL query and records the resulting dataset into internal.user_datasets.
         """
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -67,7 +67,7 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
 
                 record_res = connection.execute(
                     text("""
-                        INSERT INTO internal.generated_datasets (name, file_name, file_path, query, row_count, columns, data)
+                        INSERT INTO internal.user_datasets (name, file_name, file_path, query, row_count, columns, data)
                         VALUES (:name, :file_name, '', :query, :row_count, :columns, :data)
                         RETURNING id
                     """),

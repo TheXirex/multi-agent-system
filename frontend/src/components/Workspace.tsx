@@ -220,7 +220,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
       </div>
 
       {/* 2. Main Tab Body */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '12px', minHeight: 0 }}>
+      <div className="scroll-auto-hide" style={{ flex: 1, overflowY: 'auto', padding: '12px', minHeight: 0 }}>
         {/* ========================================================= */}
         {/* TAB 1: TABLE DATA */}
         {/* ========================================================= */}
@@ -317,7 +317,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                 </div>
 
                 {/* Table Grid */}
-                <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+                <div className="scroll-auto-hide" style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
                   <table
                     style={{
                       width: '100%',

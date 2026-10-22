@@ -47,7 +47,7 @@ async def get_dataset(dataset_id: int) -> Dict[str, Any]:
     engine = get_db()
     with engine.connect() as conn:
         row = conn.execute(
-            text("SELECT id, name, file_name, file_path, query, row_count, columns, data, created_at FROM internal.generated_datasets WHERE id = :id"),
+            text("SELECT id, name, file_name, file_path, query, row_count, columns, data, created_at FROM internal.user_datasets WHERE id = :id"),
             {"id": dataset_id},
         ).fetchone()
 

@@ -13,16 +13,21 @@ class DatabaseInspector:
 
     def get_table_names(self) -> List[str]:
         """
-        Retrieves all table names present in the configured database schema (default 'public').
+        Retrieves all table and view names present in the configured database schema (default 'public').
 
         Args:
             None
 
         Returns:
-            List[str]: List of table names found in the database.
+            List[str]: List of table and view names found in the database.
         """
         inspector = inspect(self.engine)
-        return inspector.get_table_names(schema=self.schema)
+        tables = inspector.get_table_names(schema=self.schema)
+        try:
+            views = inspector.get_view_names(schema=self.schema)
+        except Exception:
+            views = []
+        return sorted(list(set(tables + views)))
 
     def get_schema_summary(self) -> str:
         """
@@ -35,7 +40,7 @@ class DatabaseInspector:
             str: Formatted description of tables, columns, types, and foreign keys.
         """
         inspector = inspect(self.engine)
-        tables = inspector.get_table_names(schema=self.schema)
+        tables = self.get_table_names()
 
         if not tables:
             return f"No tables found in the '{self.schema}' database schema."

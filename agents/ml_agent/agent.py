@@ -161,13 +161,13 @@ class MLAgent:
                 with self.engine.connect() as conn:
                     if session_id:
                         query_sql = text("""
-                            SELECT id, name, data FROM internal.generated_datasets
+                            SELECT id, name, data FROM internal.user_datasets
                             WHERE id = ANY(:ids) AND (session_id = :session_id OR session_id IS NULL)
                             ORDER BY id ASC
                         """)
                         query_params = {"ids": target_ids, "session_id": session_id}
                     else:
-                        query_sql = text("SELECT id, name, data FROM internal.generated_datasets WHERE id = ANY(:ids) ORDER BY id ASC")
+                        query_sql = text("SELECT id, name, data FROM internal.user_datasets WHERE id = ANY(:ids) ORDER BY id ASC")
                         query_params = {"ids": target_ids}
 
                     rows = conn.execute(query_sql, query_params).fetchall()
@@ -205,18 +205,18 @@ class MLAgent:
                 except Exception as ex:
                     logger.warning(f"Failed to read dataset from path '{given_path}': {ex}")
 
-        # If still empty, query latest dataset from generated_datasets scoped to session_id if provided
+        # If still empty, query latest dataset from user_datasets scoped to session_id if provided
         if not loaded_dfs and self.engine:
             try:
                 with self.engine.connect() as conn:
                     if session_id:
                         row = conn.execute(
-                            text("SELECT id, name, data FROM internal.generated_datasets WHERE session_id = :session_id ORDER BY id DESC LIMIT 1"),
+                            text("SELECT id, name, data FROM internal.user_datasets WHERE session_id = :session_id ORDER BY id DESC LIMIT 1"),
                             {"session_id": session_id},
                         ).fetchone()
                     else:
                         row = conn.execute(
-                            text("SELECT id, name, data FROM internal.generated_datasets ORDER BY id DESC LIMIT 1")
+                            text("SELECT id, name, data FROM internal.user_datasets ORDER BY id DESC LIMIT 1")
                         ).fetchone()
 
                     if row:

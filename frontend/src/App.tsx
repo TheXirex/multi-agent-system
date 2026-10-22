@@ -367,6 +367,7 @@ export function App() {
             isBusy={isBusy}
             onSendQuery={handleSendQuery}
             currentTurnIndex={currentTurnIndex}
+            turnsCount={turns.length}
             onSelectTurn={(turnIdx) => {
               setCurrentTurnIndex(turnIdx);
               handleScrollToMessage(turnIdx);

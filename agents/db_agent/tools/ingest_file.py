@@ -205,7 +205,7 @@ class IngestTabularFileTool(BaseTool):
 
                     res = conn.execute(
                         text("""
-                            INSERT INTO internal.generated_datasets (name, file_name, file_path, query, row_count, columns, data, session_id)
+                            INSERT INTO internal.user_datasets (name, file_name, file_path, query, row_count, columns, data, session_id)
                             VALUES (:name, :file_name, '', :query, :row_count, :columns, :data, :session_id)
                             RETURNING id
                         """),
