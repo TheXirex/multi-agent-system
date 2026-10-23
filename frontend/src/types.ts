@@ -20,7 +20,7 @@ export interface MessageMetadata {
   script_id?: number | null;
   code_title?: string | null;
   task_description?: string | null;
-  table_name?: string | null;
+  table_names?: string[];
   sql_description?: string | null;
   attachments?: Attachment[];
   [key: string]: any;

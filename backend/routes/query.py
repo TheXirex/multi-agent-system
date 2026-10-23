@@ -12,6 +12,7 @@ import os
 import httpx
 from agents.db_agent.tools import IngestTabularFileTool
 from backend.database import get_db
+from shared.db import ensure_session_replica
 from backend.schemas import QueryRequest, QueryResponse
 
 logger = logging.getLogger("backend.routes.query")
@@ -72,8 +73,10 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
                 {"id": session_id},
             )
 
+    ensure_session_replica(engine, session_id)
+
     # 2. Ingest any pending attachments and bind them specifically to this session
-    attached_dataset_ids: List[int] = []
+    attached_table_names: List[str] = []
     attachment_summaries: List[Dict[str, Any]] = []
 
     if request.attachments:
@@ -87,27 +90,34 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
                     session_id=session_id,
                 )
                 if ingest_res.get("status") == "success":
-                    p_id = ingest_res.get("primary_dataset_id")
-                    if p_id:
-                        attached_dataset_ids.append(p_id)
-                    all_ids = ingest_res.get("dataset_ids", [])
-                    for d_id in all_ids:
-                        if d_id not in attached_dataset_ids:
-                            attached_dataset_ids.append(d_id)
+                    t_name = ingest_res.get("table_name")
+                    if t_name and t_name not in attached_table_names:
+                        attached_table_names.append(t_name)
+                    all_names = ingest_res.get("table_names", [])
+                    for name in all_names:
+                        if name not in attached_table_names:
+                            attached_table_names.append(name)
 
                     attachment_summaries.append({
                         "filename": att.filename,
-                        "primary_dataset_id": p_id,
-                        "dataset_ids": all_ids,
+                        "table_name": t_name,
+                        "table_names": all_names,
                     })
-                    logger.info(f"Ingested attachment '{att.filename}' for session {session_id} -> dataset_ids={all_ids}")
+                    logger.info(f"Ingested attachment '{att.filename}' for session {session_id} -> tables={all_names}")
+                elif ingest_res.get("status") == "clarification_needed":
+                    # If collision needs clarification, return early to ask user
+                    return QueryResponse(
+                        response=ingest_res.get("response", ""),
+                        session_id=session_id,
+                        metadata=ingest_res.get("metadata", {}),
+                    )
             except Exception as e:
                 logger.error(f"Error ingesting attachment {att.filename}: {e}")
 
     # Build effective query string
     if not raw_query and attachment_summaries:
-        file_names = ", ".join(f"`{a['filename']}`" for a in attachment_summaries)
-        effective_query = f"I have uploaded {file_names} (Dataset IDs: {attached_dataset_ids}). Please provide an overview and summary of this data."
+        table_names_str = ", ".join(f"`{t}`" for t in attached_table_names)
+        effective_query = f"I have uploaded data as table(s): {table_names_str}. Please provide an overview and summary of this data."
     else:
         effective_query = raw_query
 
@@ -136,18 +146,17 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
             if isinstance(meta_val, dict) and meta_val:
                 active_metadata.update(meta_val)
 
-    # Inject newly attached dataset IDs into active metadata and context
+    # Inject newly attached table names into active metadata and context
     active_metadata["session_id"] = session_id
-    if attached_dataset_ids:
-        active_metadata["dataset_id"] = attached_dataset_ids[0]
-        active_metadata["dataset_ids"] = attached_dataset_ids
-        logger.info(f"Session {session_id} active metadata updated with dataset IDs: {attached_dataset_ids}")
+    if attached_table_names:
+        active_metadata["table_names"] = attached_table_names
+        logger.info(f"Session {session_id} active metadata updated with tables: {attached_table_names}")
 
     # 4. Save User Message into PostgreSQL
     user_metadata: Dict[str, Any] = {}
     if request.attachments:
         user_metadata["attachments"] = [
-            {"filename": a.filename, "dataset_ids": attached_dataset_ids}
+            {"filename": a.filename, "tables": attached_table_names}
             for a in request.attachments
         ]
 
@@ -199,11 +208,10 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
     ai_response_text = ai_data.get("response", "")
     resp_metadata = dict(ai_data.get("metadata", {}))
 
-    # Ensure returned metadata reflects session_id and attached datasets
+    # Ensure returned metadata reflects session_id and attached tables
     resp_metadata["session_id"] = session_id
-    if attached_dataset_ids and not resp_metadata.get("dataset_id"):
-        resp_metadata["dataset_id"] = attached_dataset_ids[0]
-        resp_metadata["dataset_ids"] = attached_dataset_ids
+    if attached_table_names and not resp_metadata.get("table_names"):
+        resp_metadata["table_names"] = attached_table_names
 
     # 6. Save Assistant Response into PostgreSQL
     now_asst = datetime.now()

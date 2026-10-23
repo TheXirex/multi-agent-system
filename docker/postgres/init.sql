@@ -37,26 +37,13 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 CREATE SCHEMA IF NOT EXISTS internal;
 
-CREATE TABLE IF NOT EXISTS internal.user_datasets (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL DEFAULT 'dataset',
-    file_name VARCHAR(255) DEFAULT '',
-    file_path TEXT DEFAULT '',
-    query TEXT,
-    row_count INTEGER DEFAULT 0,
-    columns TEXT[] DEFAULT '{}',
-    data JSONB NOT NULL DEFAULT '[]',
-    session_id VARCHAR(36),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_user_datasets_session_id ON internal.user_datasets(session_id);
-
 CREATE TABLE IF NOT EXISTS internal.generated_charts (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255),
     chart_type VARCHAR(50),
     spec JSONB NOT NULL,
-    dataset_id INTEGER REFERENCES internal.user_datasets(id) ON DELETE SET NULL,
+    table_name VARCHAR(255),
+    dataset_id INTEGER,
     session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -67,7 +54,8 @@ CREATE TABLE IF NOT EXISTS internal.generated_scripts (
     script TEXT NOT NULL,
     language VARCHAR(50) DEFAULT 'python',
     task_description TEXT,
-    dataset_id INTEGER REFERENCES internal.user_datasets(id) ON DELETE SET NULL,
+    table_name VARCHAR(255),
+    dataset_id INTEGER,
     session_id VARCHAR(36),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -89,7 +77,18 @@ CREATE TABLE IF NOT EXISTS internal.chat_messages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE OR REPLACE VIEW public.user_datasets AS
-SELECT id, name, file_name, file_path, query, row_count, columns, data, session_id, created_at
-FROM internal.user_datasets;
+CREATE TABLE IF NOT EXISTS internal.change_history (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(36) NOT NULL,
+    action_type VARCHAR(50) NOT NULL,
+    table_name VARCHAR(255) NOT NULL,
+    description TEXT,
+    executed_sql TEXT NOT NULL,
+    rollback_sql TEXT,
+    before_state JSONB DEFAULT '[]',
+    after_state JSONB DEFAULT '[]',
+    is_reverted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_change_history_session_id ON internal.change_history(session_id);
 

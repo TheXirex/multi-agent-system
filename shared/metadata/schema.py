@@ -7,7 +7,7 @@ TRACKED_METADATA_KEYS: Tuple[str, ...] = (
     "chart_id",
     "chart_ids",
     "script_id",
-    "table_name",
+    "table_names",
     "sql_description",
     "code",
     "code_title",
@@ -17,6 +17,7 @@ TRACKED_METADATA_KEYS: Tuple[str, ...] = (
     "guardrail_triggered",
     "rejection_reason",
     "session_id",
+    "change_id",
 )
 
 
@@ -52,7 +53,7 @@ def build_domain_metadata(
     code: Optional[str] = None,
     code_title: Optional[str] = None,
     task_description: Optional[str] = None,
-    table_name: Optional[str] = None,
+    table_names: Optional[Any] = None,
     sql_description: Optional[str] = None,
     status: Optional[str] = None,
     questions: Optional[List[str]] = None,
@@ -74,7 +75,7 @@ def build_domain_metadata(
         code: Executed Python code snippet.
         code_title: Concise descriptive title for Python script (4-5 words max).
         task_description: Concise task description or script title (4-5 words max).
-        table_name: Concise human-readable dataset title (4-5 words max).
+        table_names: List of table names or single table name string.
         sql_description: Concise SQL description (4-5 words max).
         status: Flow status indicator (e.g. 'clarification_needed', 'completed').
         questions: Clarification questions list when status is 'clarification_needed'.
@@ -116,8 +117,11 @@ def build_domain_metadata(
     if task_description:
         meta["task_description"] = truncate_words(task_description, 5)
 
-    if table_name:
-        meta["table_name"] = truncate_words(table_name, 5)
+    if table_names:
+        if isinstance(table_names, str):
+            meta["table_names"] = [table_names]
+        elif isinstance(table_names, list):
+            meta["table_names"] = [str(t) for t in table_names if t]
 
     if sql_description:
         meta["sql_description"] = truncate_words(sql_description, 5)

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from backend.database import get_db
+from shared.db import drop_session_replica, ensure_session_replica
 from backend.schemas import (
     ChatMessageItem,
     CreateSessionRequest,
@@ -67,6 +68,7 @@ async def create_session(req: Optional[CreateSessionRequest] = None) -> SessionS
             text("INSERT INTO internal.chat_sessions (id, title, created_at, updated_at) VALUES (:id, :title, :now, :now)"),
             {"id": new_id, "title": title, "now": now},
         )
+    ensure_session_replica(engine, new_id)
     return SessionSummary(
         id=new_id,
         title=title,
@@ -131,10 +133,18 @@ async def get_session(session_id: str) -> SessionDetail:
 @router.delete("/{session_id}")
 async def delete_session(session_id: str) -> Dict[str, Any]:
     """
-    Deletes a session and its associated chat messages via cascade.
+    Deletes a session, associated messages, change history, and drops its dedicated schema replica.
     """
     engine = get_db()
+    # 1. Drop session schema replica
+    drop_session_replica(engine, session_id)
+
+    # 2. Clean session records in internal tables
     with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM internal.change_history WHERE session_id = :id"),
+            {"id": session_id},
+        )
         conn.execute(
             text("DELETE FROM internal.chat_sessions WHERE id = :id"),
             {"id": session_id},

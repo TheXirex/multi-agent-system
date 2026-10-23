@@ -1,58 +1,66 @@
-from typing import List
+from typing import List, Optional
 from sqlalchemy import Engine, inspect
+from shared.db import ensure_session_replica
 
 
 class DatabaseInspector:
     """
     Inspects database tables, columns, and relationships to provide schema context.
+    Supports session replica schemas when session_id is provided.
     """
 
     def __init__(self, engine: Engine, schema: str = "public") -> None:
         self.engine = engine
         self.schema = schema
 
-    def get_table_names(self) -> List[str]:
-        """
-        Retrieves all table and view names present in the configured database schema (default 'public').
+    def resolve_schema(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> str:
+        if schema:
+            return schema
+        if session_id:
+            return ensure_session_replica(self.engine, session_id)
+        return self.schema
 
-        Args:
-            None
-
-        Returns:
-            List[str]: List of table and view names found in the database.
+    def get_table_names(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> List[str]:
         """
+        Retrieves all table and view names present in the target schema.
+        """
+        target_schema = self.resolve_schema(session_id=session_id, schema=schema)
         inspector = inspect(self.engine)
-        tables = inspector.get_table_names(schema=self.schema)
+        tables = inspector.get_table_names(schema=target_schema)
         try:
-            views = inspector.get_view_names(schema=self.schema)
+            views = inspector.get_view_names(schema=target_schema)
         except Exception:
             views = []
         return sorted(list(set(tables + views)))
 
-    def get_schema_summary(self) -> str:
+    def get_schema_summary(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> str:
         """
         Generates a human-readable and LLM-friendly summary of the database schema.
-
-        Args:
-            None
-
-        Returns:
-            str: Formatted description of tables, columns, types, and foreign keys.
         """
+        target_schema = self.resolve_schema(session_id=session_id, schema=schema)
         inspector = inspect(self.engine)
-        tables = self.get_table_names()
+        tables = self.get_table_names(session_id=session_id, schema=target_schema)
 
         if not tables:
-            return f"No tables found in the '{self.schema}' database schema."
+            return f"No tables found in the '{target_schema}' database schema."
 
-        lines: List[str] = [f"Database Schema ({self.schema}):"]
+        lines: List[str] = [f"Database Schema ({target_schema}):"]
 
         for table in tables:
             lines.append(f"\nTable: {table}")
-            columns = inspector.get_columns(table, schema=self.schema)
-            pk_constraint = inspector.get_pk_constraint(table, schema=self.schema)
-            primary_keys = set(pk_constraint.get("constrained_columns", []))
-            fks = inspector.get_foreign_keys(table, schema=self.schema)
+            try:
+                columns = inspector.get_columns(table, schema=target_schema)
+            except Exception:
+                columns = []
+            try:
+                pk_constraint = inspector.get_pk_constraint(table, schema=target_schema)
+                primary_keys = set(pk_constraint.get("constrained_columns", []))
+            except Exception:
+                primary_keys = set()
+            try:
+                fks = inspector.get_foreign_keys(table, schema=target_schema)
+            except Exception:
+                fks = []
 
             fk_map = {}
             for fk in fks:

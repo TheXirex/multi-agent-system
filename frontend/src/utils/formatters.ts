@@ -5,7 +5,10 @@
 export function truncateToNearestSpace(text: string, limit: number = 38): string {
   if (!text) return '';
   // Clean up any trailing ellipsis first to repair previously chopped titles
-  const clean = text.replace(/\.{3,}$/, '').trim();
+  let clean = text.trim();
+  while (clean.endsWith('.')) {
+    clean = clean.slice(0, -1).trim();
+  }
   if (clean.length <= limit) return clean;
 
   const sliced = clean.slice(0, limit);

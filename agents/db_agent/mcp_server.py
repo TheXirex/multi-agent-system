@@ -45,18 +45,19 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         name="execute_sql_to_csv",
         description="Executes a raw SQL query statement against the database and exports results to a CSV file.",
     )
-    def execute_sql_to_csv(query: str, filename: Optional[str] = None) -> Dict[str, Any]:
+    def execute_sql_to_csv(query: str, filename: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes raw SQL query and exports result to CSV.
 
         Args:
             query (str): SQL query statement to execute.
             filename (Optional[str]): Optional custom file name for the CSV export.
+            session_id (Optional[str]): Optional session ID for session schema replica.
 
         Returns:
             Dict[str, Any]: Result status, dataset ID, and ID-only metadata.
         """
-        result = agent.tools.execute("execute_sql_to_csv", query=query, filename=filename)
+        result = agent.tools.execute("execute_sql_to_csv", query=query, filename=filename, session_id=session_id)
         return {
             "status": result.get("status"),
             "dataset_id": result.get("dataset_id"),
@@ -65,25 +66,65 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             },
         }
 
-
     @server.tool(
         name="get_database_schema",
         description="Retrieves the current PostgreSQL schema information including tables, columns, and foreign keys.",
     )
-    def get_database_schema() -> Dict[str, Any]:
+    def get_database_schema(session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Retrieves formatted database schema details.
 
         Args:
-            None
+            session_id (Optional[str]): Optional active session ID to inspect session replica schema.
 
         Returns:
             Dict[str, Any]: Dictionary containing schema summary text and list of table names.
         """
         return {
-            "tables": agent.inspector.get_table_names(),
-            "schema": agent.inspector.get_schema_summary(),
+            "tables": agent.inspector.get_table_names(session_id=session_id),
+            "schema": agent.inspector.get_schema_summary(session_id=session_id),
         }
+
+    @server.tool(
+        name="modify_database_table",
+        description=(
+            "Modifies database schema or data (INSERT, UPDATE, DELETE rows, ALTER TABLE, CREATE TABLE, DROP TABLE) "
+            "in the session replica database. Automatically tracks changes and creates rollback history. "
+            "If the request lacks essential information or is ambiguous, asks clarifying questions instead of guessing."
+        ),
+    )
+    def modify_database_table(instruction: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Modifies database tables or rows in the session database replica.
+
+        Args:
+            instruction (str): Natural language mutation instruction (e.g. 'Add column phone to users', 'Delete user with id=5').
+            session_id (Optional[str]): Active session ID.
+
+        Returns:
+            Dict[str, Any]: Execution status, applied SQL, and change metadata or clarification questions.
+        """
+        return agent.modify_table(instruction=instruction, session_id=session_id)
+
+    @server.tool(
+        name="rollback_database_change",
+        description=(
+            "Reverts the most recent database mutation (or a specific change ID) executed during this session. "
+            "Restores previous data or schema state safely using recorded change history."
+        ),
+    )
+    def rollback_database_change(session_id: Optional[str] = None, target_change_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Reverts previous database change.
+
+        Args:
+            session_id (Optional[str]): Active session ID.
+            target_change_id (Optional[int]): Optional specific change ID to revert.
+
+        Returns:
+            Dict[str, Any]: Status and description of the rolled back change.
+        """
+        return agent.rollback_change(session_id=session_id, target_change_id=target_change_id)
 
     @server.tool(
         name="ingest_tabular_file",

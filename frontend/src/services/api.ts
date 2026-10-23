@@ -119,7 +119,10 @@ export function formatHumanReadableError(err: any): string {
     }
   }
 
-  raw = raw.replace(/^Error:\s*/i, '').trim();
+  raw = raw.trim();
+  if (raw.toLowerCase().startsWith('error:')) {
+    raw = raw.slice(6).trim();
+  }
   return raw || 'An unexpected error occurred while processing your request. Please try again.';
 }
 
@@ -177,6 +180,20 @@ export async function fetchDataset(datasetId: number): Promise<DatasetData | nul
     return await res.json();
   } catch (err) {
     console.error(`Failed to fetch dataset ${datasetId}:`, err);
+    return null;
+  }
+}
+
+export async function fetchTable(tableName: string, sessionId?: string): Promise<DatasetData | null> {
+  try {
+    const url = sessionId
+      ? `${API_BASE}/api/tables/${encodeURIComponent(tableName)}?session_id=${encodeURIComponent(sessionId)}`
+      : `${API_BASE}/api/tables/${encodeURIComponent(tableName)}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error(`Failed to fetch table ${tableName}:`, err);
     return null;
   }
 }

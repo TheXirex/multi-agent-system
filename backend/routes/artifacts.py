@@ -39,53 +39,94 @@ async def list_tools() -> Dict[str, Any]:
     return {"tools": []}
 
 
+from typing import Optional
+from shared.db import apply_session_search_path, get_session_schema_or_public
+
+
+@router.get("/api/tables/{table_name}")
+async def get_table_data(
+    table_name: str,
+    session_id: Optional[str] = None,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """
+    Retrieves metadata and rows directly from a relational SQL table
+    in the session replica schema (or public schema).
+    """
+    engine = get_db()
+    target_schema = get_session_schema_or_public(session_id)
+    safe_table = "".join(c for c in table_name if c.isalnum() or c == "_")
+    if not safe_table:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+
+    try:
+        with engine.connect() as conn:
+            apply_session_search_path(conn, session_id)
+            col_rows = conn.execute(
+                text("""
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = :s AND table_name = :t
+                    ORDER BY ordinal_position ASC
+                """),
+                {"s": target_schema, "t": safe_table},
+            ).fetchall()
+
+            if not col_rows and target_schema != "public":
+                col_rows = conn.execute(
+                    text("""
+                        SELECT column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = :t
+                        ORDER BY ordinal_position ASC
+                    """),
+                    {"t": safe_table},
+                ).fetchall()
+                target_schema = "public"
+
+            if not col_rows:
+                raise HTTPException(status_code=404, detail=f"Table '{safe_table}' not found.")
+
+            col_names = [r[0] for r in col_rows]
+            columns = [{"name": c, "label": c, "field": c, "sortable": True, "align": "left"} for c in col_names]
+
+            data_rows = conn.execute(
+                text(f'SELECT * FROM "{target_schema}"."{safe_table}" LIMIT :limit'),
+                {"limit": limit},
+            ).fetchall()
+
+            rows = [dict(zip(col_names, [str(v) if v is not None else "" for v in dr])) for dr in data_rows]
+
+            total_count = conn.execute(
+                text(f'SELECT COUNT(*) FROM "{target_schema}"."{safe_table}"')
+            ).scalar() or 0
+
+            return {
+                "id": safe_table,
+                "name": safe_table,
+                "table_name": safe_table,
+                "schema": target_schema,
+                "row_count": total_count,
+                "columns": columns,
+                "rows": rows,
+                "data": rows,
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to query table '{safe_table}': {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Database query error: {exc}")
+
+
 @router.get("/api/datasets/{dataset_id}")
 async def get_dataset(dataset_id: int) -> Dict[str, Any]:
     """
-    Retrieves dataset metadata and rows by dataset_id.
+    Legacy endpoint for datasets (deprecated in favor of /api/tables/{table_name}).
     """
-    engine = get_db()
-    with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT id, name, file_name, file_path, query, row_count, columns, data, created_at FROM internal.user_datasets WHERE id = :id"),
-            {"id": dataset_id},
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail=f"Dataset with ID {dataset_id} not found.")
-
-    ds_id = row[0]
-    name = row[1] or "dataset"
-    query = row[4] or ""
-    row_count = row[5] or 0
-    columns_list = row[6] or []
-    data_val = row[7]
-    created_at = str(row[8])
-
-    rows: List[Dict[str, Any]] = []
-    if data_val:
-        if isinstance(data_val, str):
-            try:
-                rows = json.loads(data_val)
-            except Exception:
-                rows = []
-        elif isinstance(data_val, list):
-            rows = data_val
-
-    if rows and not columns_list:
-        columns_list = list(rows[0].keys())
-
-    columns = [{"name": c, "label": c, "field": c, "sortable": True, "align": "left"} for c in columns_list]
-
-    return {
-        "id": ds_id,
-        "name": name,
-        "query": query,
-        "row_count": len(rows) if rows else row_count,
-        "columns": columns,
-        "rows": rows,
-        "created_at": created_at,
-    }
+    raise HTTPException(
+        status_code=404,
+        detail="Dataset records are deprecated. Please query relational tables directly via /api/tables/{table_name}."
+    )
 
 
 @router.get("/api/charts/{chart_id}")

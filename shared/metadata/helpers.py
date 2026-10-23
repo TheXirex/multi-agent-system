@@ -116,4 +116,10 @@ def resolve_tool_arguments(
         if (not val or val.lower() in {"", "latest", "{{csv}}", "{{previous_step_csv}}", "{{file_path}}"}) and last_exported_csv:
             step_args["dataset_path"] = last_exported_csv
 
+    # 5. Dynamic table_names injection
+    if "table_names" not in step_args:
+        tbls = active_meta.get("table_names")
+        if tbls:
+            step_args["table_names"] = tbls if isinstance(tbls, list) else [tbls]
+
     return step_args

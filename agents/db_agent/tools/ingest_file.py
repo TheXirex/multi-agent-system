@@ -8,22 +8,48 @@ import pandas as pd
 from sqlalchemy import Engine, text
 
 from agents.db_agent.tools.base import BaseTool
+from shared.db import ensure_session_replica, get_session_schema_or_public
 
 logger = logging.getLogger(__name__)
 
 
+def sanitize_table_name(name: str) -> str:
+    """
+    Sanitizes a file or sheet name into a clean, valid PostgreSQL table identifier.
+    """
+    clean = "".join(c if c.isalnum() else "_" for c in str(name).lower().strip())
+    clean = "_".join(p for p in clean.split("_") if p)
+    if not clean:
+        clean = "uploaded_table"
+    elif clean[0].isdigit():
+        clean = f"table_{clean}"
+    return clean[:63]
+
+
+def sanitize_column_name(col: str) -> str:
+    """
+    Sanitizes a column header into a valid, safe PostgreSQL column identifier.
+    """
+    clean = "".join(c if c.isalnum() else "_" for c in str(col).lower().strip())
+    clean = "_".join(p for p in clean.split("_") if p)
+    if not clean:
+        clean = "col"
+    elif clean[0].isdigit():
+        clean = f"c_{clean}"
+    return clean[:63]
+
+
 class IngestTabularFileTool(BaseTool):
     """
-    Tool that ingests, validates, and stores tabular files (CSV, Excel) into PostgreSQL.
-    Multi-sheet Excel files are partitioned into separate datasets.
-    Handles corrupt, empty, or unsupported files gracefully and returns structured diagnostic errors.
+    Tool that ingests tabular files (CSV, Excel) directly into isolated PostgreSQL tables
+    inside the session schema replica. If a table name already exists or collides, asks the user
+    for clarification instead of guessing.
     """
 
     name: str = "ingest_tabular_file"
     description: str = (
-        "Ingests, validates, and records a tabular data file (CSV or Excel .xlsx/.xls) into the database. "
-        "For Excel files with multiple sheets, each sheet is partitioned and stored as an individual dataset. "
-        "Returns dataset IDs, column definitions, and summaries, or structured errors if the file is empty, missing, or corrupted."
+        "Ingests a tabular file (CSV or Excel .xlsx/.xls) and creates dedicated relational database table(s) "
+        "inside the active session replica. If the table already exists, pauses and asks the user for clarification."
     )
     parameters_schema: Dict[str, Any] = {
         "type": "object",
@@ -32,16 +58,19 @@ class IngestTabularFileTool(BaseTool):
                 "type": "string",
                 "description": "Path to the CSV or Excel file to ingest.",
             },
-            "dataset_name": {
+            "table_name": {
                 "type": "string",
-                "description": "Optional custom name for the ingested dataset.",
+                "description": "Optional custom name for the resulting database table.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "Set to True if user explicitly confirmed overwriting an existing table.",
             },
             "session_id": {
                 "type": "string",
-                "description": "Optional session ID to bind this dataset exclusively to a chat session.",
+                "description": "Optional session ID to scope table creation to the session replica.",
             },
         },
-        "required": ["file_path"],
     }
 
     def __init__(self, engine: Engine) -> None:
@@ -50,23 +79,16 @@ class IngestTabularFileTool(BaseTool):
     def execute(
         self,
         file_path: Optional[str] = None,
+        table_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
         file_bytes: Optional[bytes] = None,
         filename: Optional[str] = None,
+        overwrite: bool = False,
         session_id: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        Ingests and validates CSV or Excel data from disk path or bytes.
-
-        Args:
-            file_path (Optional[str]): Path to file on disk.
-            dataset_name (Optional[str]): Custom dataset name.
-            file_bytes (Optional[bytes]): Raw file bytes (for in-memory uploads).
-            filename (Optional[str]): Explicit filename override.
-
-        Returns:
-            Dict[str, Any]: Structured result with status ('success' or 'error'),
-                            dataset details or diagnostic error message.
+        Parses CSV/Excel and creates relational tables in session schema.
         """
         resolved_filename = filename
         source_buffer: Optional[Union[Path, io.BytesIO]] = None
@@ -80,7 +102,7 @@ class IngestTabularFileTool(BaseTool):
                 }
             source_buffer = io.BytesIO(file_bytes)
             if not resolved_filename:
-                resolved_filename = dataset_name or "uploaded_data.csv"
+                resolved_filename = table_name or dataset_name or "uploaded_data.csv"
         elif file_path:
             path_obj = Path(file_path)
             if not path_obj.exists():
@@ -119,7 +141,7 @@ class IngestTabularFileTool(BaseTool):
                 "metadata": {},
             }
 
-        base_name = dataset_name or Path(resolved_filename).stem
+        base_name = table_name or dataset_name or Path(resolved_filename).stem
         sheet_items: List[Tuple[str, pd.DataFrame]] = []
 
         try:
@@ -169,7 +191,7 @@ class IngestTabularFileTool(BaseTool):
                 for sname in excel.sheet_names:
                     try:
                         df_sheet = pd.read_excel(excel, sheet_name=sname)
-                        sheet_items.append((f"{base_name} - {sname}", df_sheet))
+                        sheet_items.append((f"{base_name}_{sname}", df_sheet))
                     except Exception as sheet_err:
                         logger.warning(f"Error reading sheet '{sname}' in '{resolved_filename}': {sheet_err}")
 
@@ -187,93 +209,156 @@ class IngestTabularFileTool(BaseTool):
                 "metadata": {},
             }
 
-        created_datasets: List[Dict[str, Any]] = []
+        # 1. Resolve target schema
+        target_schema = ensure_session_replica(self.engine, session_id) if session_id else "public"
+
+        # 2. Check for table name collisions
+        with self.engine.connect() as conn:
+            existing_tables = set(
+                r[0].lower()
+                for r in conn.execute(
+                    text("""
+                        SELECT table_name FROM information_schema.tables 
+                        WHERE table_schema = :s AND table_type = 'BASE TABLE'
+                    """),
+                    {"s": target_schema},
+                ).fetchall()
+            )
+
+        # Check each target item
+        for item_name, _ in sheet_items:
+            candidate_table = sanitize_table_name(item_name)
+            if candidate_table in existing_tables and not overwrite:
+                alt_name = f"{candidate_table}_v2"
+                questions = [
+                    f"Table '{candidate_table}' already exists in your session database. How would you like to proceed?\n"
+                    f"1. Overwrite the existing table '{candidate_table}'.\n"
+                    f"2. Save as a new table named '{alt_name}'.\n"
+                    f"3. Provide a custom table name."
+                ]
+                clarification_msg = (
+                    f"⚠️ Table `{candidate_table}` already exists in your session database.\n\n"
+                    f"Please specify how you would like to proceed: overwrite it, save under a new name (e.g. `{alt_name}`), or choose a custom name?"
+                )
+                return {
+                    "status": "clarification_needed",
+                    "questions": questions,
+                    "response": clarification_msg,
+                    "metadata": {
+                        "status": "clarification_needed",
+                        "questions": questions,
+                        "conflicting_table": candidate_table,
+                        "session_id": session_id,
+                    },
+                }
+
+        # 3. Create real PostgreSQL tables
+        created_tables: List[Dict[str, Any]] = []
+
         try:
             with self.engine.begin() as conn:
                 for item_name, item_df in sheet_items:
-                    item_df.columns = [str(c).strip() for c in item_df.columns]
-                    columns_list = list(item_df.columns)
-                    raw_records = item_df.to_dict(orient="records")
+                    target_table = sanitize_table_name(item_name)
 
-                    clean_records = [
-                        {
-                            col: (None if pd.isna(val) else val)
-                            for col, val in row.items()
-                        }
-                        for row in raw_records
-                    ]
+                    # Sanitize column names
+                    used_cols: set = set()
+                    new_cols: List[str] = []
+                    for c in item_df.columns:
+                        sc = sanitize_column_name(c)
+                        orig = sc
+                        counter = 1
+                        while sc in used_cols:
+                            sc = f"{orig}_{counter}"
+                            counter += 1
+                        used_cols.add(sc)
+                        new_cols.append(sc)
 
-                    res = conn.execute(
-                        text("""
-                            INSERT INTO internal.user_datasets (name, file_name, file_path, query, row_count, columns, data, session_id)
-                            VALUES (:name, :file_name, '', :query, :row_count, :columns, :data, :session_id)
-                            RETURNING id
-                        """),
-                        {
-                            "name": item_name,
-                            "file_name": f"{item_name}.csv",
-                            "query": f"-- Ingested dataset: {resolved_filename} ({item_name})",
-                            "row_count": len(clean_records),
-                            "columns": columns_list,
-                            "data": json.dumps(clean_records, default=str),
-                            "session_id": session_id,
-                        },
+                    clean_df = item_df.copy()
+                    clean_df.columns = new_cols
+
+                    # Write directly to session schema table
+                    clean_df.to_sql(
+                        name=target_table,
+                        con=conn,
+                        schema=target_schema,
+                        if_exists="replace",
+                        index=False,
                     )
-                    ds_id = res.scalar()
 
-                    types_summary = {col: str(item_df[col].dtype) for col in columns_list}
-                    sample_preview = item_df.head(2).to_dict(orient="records")
+                    # Record change in change_history for full rollback support
+                    if session_id:
+                        conn.execute(
+                            text("""
+                                INSERT INTO internal.change_history (
+                                    session_id, action_type, table_name, description,
+                                    executed_sql, rollback_sql, before_state, after_state
+                                ) VALUES (
+                                    :session_id, 'CREATE_TABLE', :table_name, :description,
+                                    :executed_sql, :rollback_sql, '[]', '[]'
+                                )
+                            """),
+                            {
+                                "session_id": session_id,
+                                "table_name": target_table,
+                                "description": f"Ingested {resolved_filename} as table '{target_table}'",
+                                "executed_sql": f"-- Created table {target_schema}.{target_table} from {resolved_filename}",
+                                "rollback_sql": f'DROP TABLE IF EXISTS "{target_schema}"."{target_table}" CASCADE;',
+                            },
+                        )
 
-                    created_datasets.append({
-                        "id": ds_id,
-                        "name": item_name,
-                        "row_count": len(clean_records),
-                        "columns": columns_list,
-                        "column_types": types_summary,
-                        "preview": sample_preview,
-                        "session_id": session_id,
+                    preview_records = clean_df.head(5).to_dict(orient="records")
+                    created_tables.append({
+                        "table_name": target_table,
+                        "row_count": len(clean_df),
+                        "columns": new_cols,
+                        "preview": preview_records,
                     })
 
         except Exception as db_exc:
-            logger.error(f"Database error storing datasets for '{resolved_filename}': {db_exc}", exc_info=True)
+            logger.error(f"Database error writing tables for '{resolved_filename}': {db_exc}", exc_info=True)
             return {
                 "status": "error",
-                "error": f"Database error storing datasets: {db_exc}",
+                "error": f"Database error creating table: {db_exc}",
                 "metadata": {},
             }
 
-        if not created_datasets:
+        if not created_tables:
             return {
                 "status": "error",
-                "error": f"No valid datasets could be extracted from '{resolved_filename}'.",
+                "error": f"No valid tables could be created from '{resolved_filename}'.",
                 "metadata": {},
             }
 
-        primary_id = created_datasets[0]["id"]
-        dataset_ids = [d["id"] for d in created_datasets]
+        primary_table = created_tables[0]["table_name"]
+        all_table_names = [t["table_name"] for t in created_tables]
 
-        summary_lines = [
-            f"File '{resolved_filename}' successfully ingested into database.",
+        # Generate readable summary
+        msg_lines = [
+            f"📁 **File successfully uploaded and stored as a database table:** `{primary_table}`\n",
         ]
-        if len(created_datasets) == 1:
-            ds = created_datasets[0]
-            summary_lines.append(f"Created dataset #{ds['id']} ('{ds['name']}'): {ds['row_count']} rows, {len(ds['columns'])} columns.")
-            summary_lines.append("Columns: " + ", ".join(f"`{c}`" for c in ds["columns"]))
+        if len(created_tables) == 1:
+            t = created_tables[0]
+            msg_lines.append(f"Created table **`{t['table_name']}`**: {t['row_count']} rows, {len(t['columns'])} columns.")
+            msg_lines.append("\n**Columns:** " + ", ".join(f"`{c}`" for c in t["columns"]))
         else:
-            summary_lines.append(f"Partitioned into {len(created_datasets)} individual datasets:")
-            for ds in created_datasets:
-                summary_lines.append(f"- Dataset #{ds['id']} ('{ds['name']}'): {ds['row_count']} rows, columns: " + ", ".join(f"`{c}`" for c in ds["columns"]))
+            msg_lines.append(f"Partitioned into **{len(created_tables)} individual tables** (by sheet):")
+            for t in created_tables:
+                msg_lines.append(f"- **`{t['table_name']}`**: {t['row_count']} rows, columns: " + ", ".join(f"`{c}`" for c in t["columns"]))
+
+        msg_lines.append("\nYou can now execute SQL queries against this table or train machine learning models.")
+        msg_markdown = "\n".join(msg_lines)
 
         return {
             "status": "success",
-            "primary_dataset_id": primary_id,
-            "dataset_ids": dataset_ids,
-            "datasets": created_datasets,
+            "table_name": primary_table,
+            "table_names": all_table_names,
+            "tables": created_tables,
             "session_id": session_id,
-            "summary": "\n".join(summary_lines),
+            "response": msg_markdown,
+            "summary": msg_markdown,
             "metadata": {
-                "dataset_id": primary_id,
-                "dataset_ids": dataset_ids,
+                "table_name": primary_table,
+                "table_names": all_table_names,
                 "session_id": session_id,
             },
         }

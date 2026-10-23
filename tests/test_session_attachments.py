@@ -24,37 +24,36 @@ async def run_verification():
     tool = IngestTabularFileTool(engine=engine)
     res_a = tool.execute(file_bytes=csv_bytes, filename="session_a_customers.csv", session_id=sess_a)
     assert res_a["status"] == "success", f"Ingest failed: {res_a}"
-    ds_id_a = res_a["primary_dataset_id"]
-    print(f"Session A dataset created: id={ds_id_a}, session_id={res_a['session_id']}")
+    t_name_a = res_a["table_name"]
+    print(f"Session A table created: table_name={t_name_a}, session_id={res_a['session_id']}")
     
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT id, name, session_id FROM internal.user_datasets WHERE id = :id"),
-            {"id": ds_id_a}
-        ).fetchone()
-        assert row is not None
-        assert row[2] == sess_a, f"Expected session_id {sess_a}, got {row[2]}"
-        print(f"Verified DB row has session_id: {row[2]}")
+        clean_id = "".join(c if c.isalnum() else "_" for c in sess_a.lower())
+        schema_a = f"session_{clean_id}"
+        count = conn.execute(
+            text(f'SELECT COUNT(*) FROM "{schema_a}"."{t_name_a}"')
+        ).scalar()
+        assert count > 0, f"Expected rows in {schema_a}.{t_name_a}"
+        print(f"Verified DB table '{schema_a}.{t_name_a}' has {count} rows")
         
     print("\n--- 2. Testing MLAgent session scoping ---")
     ml_agent = create_ml_agent(engine=engine)
     
-    # Query within session A -> must find the dataset
+    # Query within session A -> must find the table
     dfs_a, matched_a, all_a = ml_agent._resolve_in_memory_datasets(
-        given_id=ds_id_a,
+        table_names=[t_name_a],
         session_id=sess_a,
     )
-    assert matched_a == ds_id_a, f"Expected to find dataset {ds_id_a} in session A"
     assert len(dfs_a) > 0, "Expected non-empty dfs"
-    print(f"Session A successfully resolved its dataset #{ds_id_a}")
+    print(f"Session A successfully resolved its table '{t_name_a}'")
     
-    # Query within session B for dataset A's ID -> must NOT find it!
+    # Query within session B for table A -> must NOT find it!
     dfs_b, matched_b, all_b = ml_agent._resolve_in_memory_datasets(
-        given_id=ds_id_a,
+        table_names=[t_name_a],
         session_id=sess_b,
     )
-    assert matched_b != ds_id_a, f"Session B should NOT have access to dataset {ds_id_a} from session A!"
-    print(f"Session B correctly blocked from accessing session A dataset #{ds_id_a}")
+    assert len(dfs_b) == 0, f"Session B should NOT have access to table {t_name_a} from session A!"
+    print(f"Session B correctly blocked from accessing session A table '{t_name_a}'")
 
     print("\n--- 3. Testing API /api/query with base64 attachment ---")
     transport = ASGITransport(app=app)

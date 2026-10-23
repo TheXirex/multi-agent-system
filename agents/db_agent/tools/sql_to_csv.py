@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import Engine, text
 
 from agents.db_agent.tools.base import BaseTool
+from shared.db import apply_session_search_path, ensure_session_replica
 
 
 class ExecuteSQLAndExportCSVTool(BaseTool):
@@ -31,6 +32,10 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
                 "type": "string",
                 "description": "Optional name for the dataset.",
             },
+            "session_id": {
+                "type": "string",
+                "description": "Optional session ID to scope query and dataset to a session replica.",
+            },
         },
         "required": ["query"],
     }
@@ -40,9 +45,15 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
         self.output_dir = output_dir or (Path(tempfile.gettempdir()) / "app_temp")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def execute(self, query: str, filename: Optional[str] = None) -> Dict[str, Any]:
+    def execute(
+        self,
+        query: str,
+        filename: Optional[str] = None,
+        session_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
         """
-        Executes the provided SQL query and records the resulting dataset into internal.user_datasets.
+        Executes the provided SQL query and returns the resulting records.
         """
         if not filename:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -50,37 +61,12 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
         name = filename.removesuffix(".csv")
 
         try:
-            dataset_id = None
+            schema_name = ensure_session_replica(self.engine, session_id) if session_id else None
             with self.engine.begin() as connection:
+                apply_session_search_path(connection, session_id)
                 result = connection.execute(text(query))
-                columns = list(result.keys())
-                raw_rows: List[List[Any]] = [list(row) for row in result.fetchall()]
-
-                # Serialize rows for JSONB storage
-                rows_records = [
-                    {
-                        col: (str(val) if val is not None and not isinstance(val, (int, float, bool, str)) else val)
-                        for col, val in zip(columns, row)
-                    }
-                    for row in raw_rows
-                ]
-
-                record_res = connection.execute(
-                    text("""
-                        INSERT INTO internal.user_datasets (name, file_name, file_path, query, row_count, columns, data)
-                        VALUES (:name, :file_name, '', :query, :row_count, :columns, :data)
-                        RETURNING id
-                    """),
-                    {
-                        "name": name,
-                        "file_name": f"{name}.csv",
-                        "query": query,
-                        "row_count": len(raw_rows),
-                        "columns": columns,
-                        "data": json.dumps(rows_records, default=str),
-                    },
-                )
-                dataset_id = record_res.scalar()
+                columns = list(result.keys()) if result.returns_rows else []
+                raw_rows: List[List[Any]] = [list(row) for row in result.fetchall()] if result.returns_rows else []
 
             preview_rows = [
                 [str(val) if val is not None and not isinstance(val, (int, float, bool, str)) else val for val in row]
@@ -89,7 +75,6 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
 
             return {
                 "status": "success",
-                "dataset_id": dataset_id,
                 "name": name,
                 "file_name": f"{name}.csv",
                 "row_count": len(raw_rows),

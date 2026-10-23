@@ -11,7 +11,13 @@ from agents.db_agent.config import Settings, get_settings
 from agents.db_agent.db import DatabaseInspector, create_db_engine
 from agents.db_agent.prompts import prompt_loader
 from agents.db_agent.utils.schemas import SQLGenerationOutput
-from agents.db_agent.tools import ExecuteSQLAndExportCSVTool, IngestTabularFileTool, ToolRegistry
+from agents.db_agent.tools import (
+    ExecuteSQLAndExportCSVTool,
+    IngestTabularFileTool,
+    ModifyDatabaseTableTool,
+    RollbackDatabaseChangeTool,
+    ToolRegistry,
+)
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 from shared.metadata import truncate_words
@@ -33,6 +39,7 @@ class AgentState(TypedDict):
     response: str
     error: Optional[str]
     retry_count: int
+    session_id: Optional[str]
 
 
 class DBAgent:
@@ -55,12 +62,13 @@ class DBAgent:
         self.max_retries = max_retries
         self.graph = self._build_graph()
 
-    def run(self, user_request: str) -> Dict[str, Any]:
+    def run(self, user_request: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Executes the LangGraph agent workflow for the given user request.
 
         Args:
             user_request (str): Natural language user requirement.
+            session_id (Optional[str]): Optional active session ID for session schema replica.
 
         Returns:
             Dict[str, Any]: Final graph state containing execution details and response.
@@ -75,6 +83,7 @@ class DBAgent:
             "response": "",
             "error": None,
             "retry_count": 0,
+            "session_id": session_id,
         }
         return self.graph.invoke(initial_state)
 
@@ -121,7 +130,7 @@ class DBAgent:
         Returns:
             Dict[str, Any]: Structured dictionary with response and ID-only metadata.
         """
-        final_state = self.run(user_input)
+        final_state = self.run(user_input, session_id=session_id)
         tool_result = final_state.get("tool_result") or {}
         dataset_id = tool_result.get("dataset_id")
         sql_query = final_state.get("sql_query", "")
@@ -177,6 +186,32 @@ class DBAgent:
             session_id=session_id,
         )
 
+    def modify_table(self, instruction: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Modifies table data or structure in the session replica database.
+
+        Args:
+            instruction (str): Natural language instruction describing the mutation.
+            session_id (Optional[str]): Optional active session ID.
+
+        Returns:
+            Dict[str, Any]: Status, message, and change record details.
+        """
+        return self.tools.execute("modify_database_table", instruction=instruction, session_id=session_id)
+
+    def rollback_change(self, session_id: Optional[str] = None, target_change_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Rolls back database changes in the session replica.
+
+        Args:
+            session_id (Optional[str]): Active session ID.
+            target_change_id (Optional[int]): Optional specific change ID to rollback.
+
+        Returns:
+            Dict[str, Any]: Status and description of the rolled back change.
+        """
+        return self.tools.execute("rollback_database_change", session_id=session_id, target_change_id=target_change_id)
+
     def _build_graph(self) -> Any:
         """
         Constructs and compiles the LangGraph StateGraph workflow for database query processing.
@@ -219,7 +254,7 @@ class DBAgent:
         Returns:
             Dict[str, Any]: State updates with retrieved schema context.
         """
-        schema_summary = self.inspector.get_schema_summary()
+        schema_summary = self.inspector.get_schema_summary(session_id=state.get("session_id"))
         return {"schema": schema_summary}
 
     def _generate_sql_node(self, state: AgentState) -> Dict[str, Any]:
@@ -309,7 +344,12 @@ class DBAgent:
         """
         sql_query = state.get("sql_query", "")
         table_name = state.get("table_name", "Query Results")
-        tool_result = self.tools.execute("execute_sql_to_csv", query=sql_query, filename=table_name)
+        tool_result = self.tools.execute(
+            "execute_sql_to_csv",
+            query=sql_query,
+            filename=table_name,
+            session_id=state.get("session_id"),
+        )
 
         error = tool_result.get("error") if tool_result.get("status") == "error" else None
         current_retries = state.get("retry_count", 0)
@@ -413,6 +453,11 @@ def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
         api_key=cfg.llm_api_key or None,
         model_name=cfg.llm_model,
     )
+
+    modify_tool = ModifyDatabaseTableTool(engine=engine, llm=active_llm)
+    registry.register(modify_tool)
+    rollback_tool = RollbackDatabaseChangeTool(engine=engine)
+    registry.register(rollback_tool)
 
     return DBAgent(llm=active_llm, inspector=inspector, tools=registry)
 

@@ -37,26 +37,34 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
         dataset_path: Optional[str] = None,
         dataset_id: Optional[int] = None,
         dataset_ids: Optional[List[int]] = None,
+        table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        Executes ML task on the given dataset(s).
+        Executes ML task on the given dataset(s) or database table(s).
 
         Args:
             task_description (str): Natural language description of the analytical or ML task.
             dataset_path (Optional[str]): Optional path to tabular dataset file on disk.
             dataset_id (Optional[int]): Database identifier of the primary dataset.
             dataset_ids (Optional[List[int]]): Optional list of multiple dataset identifiers.
+            table_names (Optional[Union[List[str], str]]): Relational database table name or list of table names to analyze.
             session_id (Optional[str]): Optional session ID to bind and scope the analysis.
 
         Returns:
             Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
         """
+        resolved_tables = table_names
+        if not resolved_tables and "table_name" in kwargs:
+            resolved_tables = kwargs["table_name"]
+
         return await agent.run(
             task_description=task_description,
             dataset_path=dataset_path,
             dataset_id=dataset_id,
             dataset_ids=dataset_ids,
+            table_names=resolved_tables,
             session_id=session_id,
         )
 

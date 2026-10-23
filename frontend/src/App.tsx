@@ -7,9 +7,20 @@ import { Chat } from './components/Chat';
 import { Workspace } from './components/Workspace';
 
 function extractCodeBlock(text: string, lang: string): string | null {
-  const regex = new RegExp(`\`\`\`${lang}\\s*\\n([\\s\\S]*?)\`\`\``, 'i');
-  const match = text.match(regex);
-  return match ? match[1].trim() : null;
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  const marker = '```' + lang.toLowerCase();
+  const startIdx = lower.indexOf(marker);
+  if (startIdx === -1) return null;
+
+  const afterMarker = startIdx + marker.length;
+  const lineEndIdx = text.indexOf('\n', afterMarker);
+  if (lineEndIdx === -1) return null;
+
+  const endIdx = text.indexOf('```', lineEndIdx);
+  if (endIdx === -1) return null;
+
+  return text.substring(lineEndIdx + 1, endIdx).trim();
 }
 
 export function App() {
@@ -71,9 +82,11 @@ export function App() {
         assistantTurnCounter += 1;
         const currentTurn = assistantTurnCounter;
 
-        // Fetch dataset
+        // Fetch table data
         let datasetData = null;
-        if (meta.dataset_id) {
+        if (meta.table_names && meta.table_names.length > 0) {
+          datasetData = await api.fetchTable(meta.table_names[0], sessionId);
+        } else if (meta.dataset_id) {
           datasetData = await api.fetchDataset(meta.dataset_id);
         }
 
@@ -217,19 +230,21 @@ export function App() {
         setMessages((prev) => [...prev, userMsg]);
 
         const uploadRes = await api.uploadFile(attachedFile, currentSessionId || undefined);
-        const primaryDsId = uploadRes.primary_dataset_id;
+        const tableNames: string[] = uploadRes.table_names || (uploadRes.table_name ? [uploadRes.table_name] : []);
         const msgText = uploadRes.message || `File \`${attachedFile.name}\` uploaded and ingested.`;
 
         let dsData = null;
-        if (primaryDsId) {
-          dsData = await api.fetchDataset(primaryDsId);
+        if (tableNames.length > 0) {
+          dsData = await api.fetchTable(tableNames[0], uploadRes.session_id || currentSessionId || undefined);
+        } else if (uploadRes.primary_dataset_id) {
+          dsData = await api.fetchDataset(uploadRes.primary_dataset_id);
         }
 
         const newTurnIdx = turns.length + 1;
         const assistantMsg: Message = {
           role: 'assistant',
           content: msgText,
-          metadata: { dataset_id: primaryDsId },
+          metadata: { table_names: tableNames },
           turnIndex: newTurnIdx,
           datasetData: dsData,
         };
@@ -240,7 +255,7 @@ export function App() {
           totalTurns: newTurnIdx,
           userQuery: text || `Uploaded ${attachedFile.name}`,
           messageContent: msgText,
-          metadata: { dataset_id: primaryDsId },
+          metadata: { table_names: tableNames },
           datasetData: dsData,
           chartsData: [],
         };
@@ -265,7 +280,9 @@ export function App() {
         const meta = queryRes.metadata || {};
 
         let dsData = null;
-        if (meta.dataset_id) {
+        if (meta.table_names && meta.table_names.length > 0) {
+          dsData = await api.fetchTable(meta.table_names[0], queryRes.session_id || currentSessionId || undefined);
+        } else if (meta.dataset_id) {
           dsData = await api.fetchDataset(meta.dataset_id);
         }
 

@@ -17,6 +17,7 @@ from agents.ml_agent.config import MLAgentSettings, get_ml_settings
 from agents.ml_agent.prompts import prompt_loader
 from agents.ml_agent.runner import MLCodeRunner
 from agents.ml_agent.utils.schemas import ClarityQuestion, MLCodeGenerationOutput, TaskClarityOutput
+from shared.db import apply_session_search_path, get_session_schema_or_public
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 from shared.metadata import build_domain_metadata, truncate_words
@@ -34,6 +35,7 @@ class MLAgentState(TypedDict):
     dataset_path: str
     dataset_id: Optional[int]
     dataset_ids: Optional[List[int]]
+    table_names: Optional[List[str]]
     session_id: Optional[str]
     in_memory_datasets: Dict[str, Any]
     is_multi_dataset: bool
@@ -143,51 +145,41 @@ class MLAgent:
         given_path: Optional[str] = None,
         given_id: Optional[int] = None,
         given_ids: Optional[List[int]] = None,
+        table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
+        **kwargs: Any,
     ) -> Tuple[Dict[str, pd.DataFrame], Optional[int], List[int]]:
         """
         Loads dataset records directly into memory as pandas DataFrames without writing CSVs to disk.
         Supports single and multiple datasets, scoped strictly to the given session_id when provided.
+        Prioritizes querying the actual relational SQL table in the session schema.
         """
         loaded_dfs: Dict[str, pd.DataFrame] = {}
-        target_ids: List[int] = []
-        if given_ids:
-            target_ids = [int(i) for i in given_ids]
-        elif given_id:
-            target_ids = [int(given_id)]
 
-        if target_ids and self.engine:
+        # 1. Normalize table_names
+        resolved_tables: List[str] = []
+        if isinstance(table_names, str):
+            resolved_tables = [table_names]
+        elif isinstance(table_names, list):
+            resolved_tables = [str(t) for t in table_names if t]
+        elif "table_name" in kwargs and kwargs["table_name"]:
+            resolved_tables = [str(kwargs["table_name"])]
+
+        if resolved_tables and self.engine:
+            target_schema = get_session_schema_or_public(session_id)
             try:
                 with self.engine.connect() as conn:
-                    if session_id:
-                        query_sql = text("""
-                            SELECT id, name, data FROM internal.user_datasets
-                            WHERE id = ANY(:ids) AND (session_id = :session_id OR session_id IS NULL)
-                            ORDER BY id ASC
-                        """)
-                        query_params = {"ids": target_ids, "session_id": session_id}
-                    else:
-                        query_sql = text("SELECT id, name, data FROM internal.user_datasets WHERE id = ANY(:ids) ORDER BY id ASC")
-                        query_params = {"ids": target_ids}
-
-                    rows = conn.execute(query_sql, query_params).fetchall()
-                    resolved_ids: List[int] = []
-                    for r in rows:
-                        ds_id, ds_name, raw_data = r[0], r[1], r[2]
-                        resolved_ids.append(ds_id)
-                        if isinstance(raw_data, str):
-                            raw_data = json.loads(raw_data)
-                        if isinstance(raw_data, list):
-                            df = pd.DataFrame(raw_data)
-                            loaded_dfs[f"data_{ds_id}"] = df
-                            clean_var = f"data_{self._clean_identifier(ds_name)}"
-                            loaded_dfs[clean_var] = df
-                    target_ids = resolved_ids
+                    apply_session_search_path(conn, session_id)
+                    for t_name in resolved_tables:
+                        clean_var = f"data_{self._clean_identifier(t_name)}"
+                        df = pd.read_sql(text(f'SELECT * FROM "{target_schema}"."{t_name}"'), conn)
+                        loaded_dfs[clean_var] = df
+                        if "data" not in loaded_dfs:
+                            loaded_dfs["data"] = df
             except Exception as ex:
-                logger.warning(f"Failed to lookup datasets by IDs {target_ids}: {ex}")
-                target_ids = []
+                logger.warning(f"Failed to load table(s) {resolved_tables} from schema '{target_schema}': {ex}")
 
-        # If not resolved by ID, try given_path
+        # If not resolved by ID or table_name, try given_path
         if not loaded_dfs and given_path:
             p = Path(given_path)
             if p.is_file():
@@ -205,37 +197,30 @@ class MLAgent:
                 except Exception as ex:
                     logger.warning(f"Failed to read dataset from path '{given_path}': {ex}")
 
-        # If still empty, query latest dataset from user_datasets scoped to session_id if provided
-        if not loaded_dfs and self.engine:
+        # If still empty, query tables present in the target session schema
+        if not loaded_dfs and self.engine and session_id:
             try:
+                target_schema = get_session_schema_or_public(session_id)
                 with self.engine.connect() as conn:
-                    if session_id:
-                        row = conn.execute(
-                            text("SELECT id, name, data FROM internal.user_datasets WHERE session_id = :session_id ORDER BY id DESC LIMIT 1"),
-                            {"session_id": session_id},
-                        ).fetchone()
-                    else:
-                        row = conn.execute(
-                            text("SELECT id, name, data FROM internal.user_datasets ORDER BY id DESC LIMIT 1")
-                        ).fetchone()
-
-                    if row:
-                        ds_id, ds_name, raw_data = row[0], row[1], row[2]
-                        if isinstance(raw_data, str):
-                            raw_data = json.loads(raw_data)
-                        if isinstance(raw_data, list):
-                            df = pd.DataFrame(raw_data)
+                    apply_session_search_path(conn, session_id)
+                    schema_tables = [
+                        r[0]
+                        for r in conn.execute(
+                            text("SELECT table_name FROM information_schema.tables WHERE table_schema = :s AND table_type = 'BASE TABLE' ORDER BY table_name ASC"),
+                            {"s": target_schema},
+                        ).fetchall()
+                    ]
+                    for t_name in schema_tables:
+                        clean_var = f"data_{self._clean_identifier(t_name)}"
+                        df = pd.read_sql(text(f'SELECT * FROM "{target_schema}"."{t_name}"'), conn)
+                        loaded_dfs[clean_var] = df
+                        if "data" not in loaded_dfs:
                             loaded_dfs["data"] = df
-                            loaded_dfs[f"data_{ds_id}"] = df
-                            target_ids = [ds_id]
-                    else:
-                        target_ids = []
             except Exception as ex:
-                logger.debug(f"Could not load latest dataset from database: {ex}")
-                target_ids = []
+                logger.debug(f"Could not load tables from schema '{target_schema}': {ex}")
 
-        actual_ids = target_ids if loaded_dfs else []
-        primary_id = actual_ids[0] if actual_ids else None
+        actual_ids: List[int] = []
+        primary_id = None
         return loaded_dfs, primary_id, actual_ids
 
     async def _prepare_dataset_node(self, state: MLAgentState) -> Dict[str, Any]:
@@ -245,12 +230,14 @@ class MLAgent:
         given_path = state.get("dataset_path", "")
         given_id = state.get("dataset_id")
         given_ids = state.get("dataset_ids")
+        table_names = state.get("table_names")
         sess_id = state.get("session_id")
 
         loaded_dfs, matched_id, all_ids = self._resolve_in_memory_datasets(
             given_path=given_path,
             given_id=given_id,
             given_ids=given_ids,
+            table_names=table_names,
             session_id=sess_id,
         )
 
@@ -780,7 +767,9 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
         dataset_path: Optional[str] = None,
         dataset_id: Optional[int] = None,
         dataset_ids: Optional[List[int]] = None,
+        table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Runs the full end-to-end ML Agent workflow asynchronously, returning response
@@ -791,16 +780,26 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
             dataset_path (Optional[str]): Path to CSV dataset file.
             dataset_id (Optional[int]): Database identifier of the dataset.
             dataset_ids (Optional[List[int]]): Optional list of multiple dataset identifiers.
+            table_names (Optional[Union[List[str], str]]): Relational database table name or list of table names.
             session_id (Optional[str]): Optional session ID to bind and scope the analysis.
 
         Returns:
             Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
         """
+        resolved_tables: Optional[List[str]] = None
+        if isinstance(table_names, str):
+            resolved_tables = [table_names]
+        elif isinstance(table_names, list):
+            resolved_tables = [str(t) for t in table_names if t]
+        elif "table_name" in kwargs and kwargs["table_name"]:
+            resolved_tables = [str(kwargs["table_name"])]
+
         initial_state: MLAgentState = {
             "task_description": task_description,
             "dataset_path": dataset_path or "",
             "dataset_id": dataset_id,
             "dataset_ids": dataset_ids,
+            "table_names": resolved_tables,
             "session_id": session_id,
             "in_memory_datasets": {},
             "is_multi_dataset": False,
@@ -878,7 +877,9 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
         dataset_path: Optional[str] = None,
         dataset_id: Optional[int] = None,
         dataset_ids: Optional[List[int]] = None,
+        table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Synchronous execution helper.
@@ -890,7 +891,9 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
                     dataset_path=dataset_path,
                     dataset_id=dataset_id,
                     dataset_ids=dataset_ids,
+                    table_names=table_names,
                     session_id=session_id,
+                    **kwargs,
                 )
             )
         except RuntimeError:

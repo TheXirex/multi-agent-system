@@ -8,6 +8,7 @@ from sqlalchemy import text
 
 from agents.db_agent.tools import IngestTabularFileTool
 from backend.database import get_db
+from shared.db import ensure_session_replica
 
 logger = logging.getLogger("backend.routes.upload")
 
@@ -31,6 +32,8 @@ async def upload_file(
         raise HTTPException(status_code=400, detail=f"Failed to read uploaded file: {exc}")
 
     engine = get_db()
+    if session_id:
+        ensure_session_replica(engine, session_id)
     ingest_tool = IngestTabularFileTool(engine=engine)
     result = ingest_tool.execute(file_bytes=content, filename=filename, session_id=session_id)
 
@@ -40,24 +43,35 @@ async def upload_file(
             detail=result.get("error", "Unknown file ingestion error"),
         )
 
-    created_datasets = result.get("datasets", [])
-    primary_id = result.get("primary_dataset_id")
-    dataset_ids = result.get("dataset_ids", [])
+    if result.get("status") == "clarification_needed":
+        clarification_msg = result.get("response", "")
+        if session_id:
+            now = datetime.now()
+            with engine.begin() as conn:
+                conn.execute(
+                    text("""
+                        INSERT INTO internal.chat_messages (session_id, role, content, metadata, created_at)
+                        VALUES (:sid, 'assistant', :content, :meta, :now)
+                    """),
+                    {
+                        "sid": session_id,
+                        "content": clarification_msg,
+                        "meta": json.dumps(result.get("metadata", {})),
+                        "now": now,
+                    },
+                )
+        return {
+            "status": "clarification_needed",
+            "session_id": session_id,
+            "message": clarification_msg,
+            "questions": result.get("questions", []),
+            "metadata": result.get("metadata", {}),
+        }
 
-    msg_lines = [
-        f"📁 **File uploaded successfully:** `{filename}`\n",
-    ]
-    if len(created_datasets) == 1:
-        ds = created_datasets[0]
-        msg_lines.append(f"Created dataset **#{ds['id']} ({ds['name']})**: {ds['row_count']} rows, {len(ds['columns'])} columns.")
-        msg_lines.append("\n**Columns:** " + ", ".join(f"`{c}`" for c in ds["columns"]))
-    else:
-        msg_lines.append(f"Detected and partitioned into **{len(created_datasets)} separate datasets** (by sheet):")
-        for ds in created_datasets:
-            msg_lines.append(f"- **Dataset #{ds['id']} (`{ds['name']}`)**: {ds['row_count']} rows, columns: " + ", ".join(f"`{c}`" for c in ds["columns"]))
-
-    msg_lines.append("\nYou can now request ML modeling, regression/classification, clustering, or data visualizations for this dataset.")
-    msg_markdown = "\n".join(msg_lines)
+    table_name = result.get("table_name")
+    table_names = result.get("table_names", [table_name] if table_name else [])
+    created_tables = result.get("tables", [])
+    msg_markdown = result.get("response") or result.get("summary", "")
 
     if session_id:
         now = datetime.now()
@@ -71,8 +85,7 @@ async def upload_file(
                     "sid": session_id,
                     "content": msg_markdown,
                     "meta": json.dumps({
-                        "dataset_id": primary_id,
-                        "dataset_ids": dataset_ids,
+                        "table_names": table_names,
                         "uploaded_file": filename,
                     }),
                     "now": now,
@@ -86,8 +99,7 @@ async def upload_file(
     return {
         "status": "success",
         "session_id": session_id,
-        "primary_dataset_id": primary_id,
-        "dataset_ids": dataset_ids,
-        "datasets": created_datasets,
+        "table_names": table_names,
+        "tables": created_tables,
         "message": msg_markdown,
     }
