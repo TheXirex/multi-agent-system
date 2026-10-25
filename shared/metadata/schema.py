@@ -7,6 +7,10 @@ TRACKED_METADATA_KEYS: Tuple[str, ...] = (
     "chart_id",
     "chart_ids",
     "script_id",
+    "sql_script_id",
+    "python_script_id",
+    "sql_query",
+    "table_name",
     "table_names",
     "sql_description",
     "code",
@@ -50,9 +54,13 @@ def build_domain_metadata(
     chart_id: Optional[int] = None,
     chart_ids: Optional[List[int]] = None,
     script_id: Optional[int] = None,
+    sql_script_id: Optional[int] = None,
+    python_script_id: Optional[int] = None,
+    sql_query: Optional[str] = None,
     code: Optional[str] = None,
     code_title: Optional[str] = None,
     task_description: Optional[str] = None,
+    table_name: Optional[str] = None,
     table_names: Optional[Any] = None,
     sql_description: Optional[str] = None,
     status: Optional[str] = None,
@@ -108,6 +116,15 @@ def build_domain_metadata(
     if script_id is not None:
         meta["script_id"] = script_id
 
+    if sql_script_id is not None:
+        meta["sql_script_id"] = sql_script_id
+
+    if python_script_id is not None:
+        meta["python_script_id"] = python_script_id
+
+    if sql_query:
+        meta["sql_query"] = sql_query
+
     if code:
         meta["code"] = code
 
@@ -117,11 +134,16 @@ def build_domain_metadata(
     if task_description:
         meta["task_description"] = truncate_words(task_description, 5)
 
+    if table_name:
+        meta["table_name"] = truncate_words(table_name, 5)
+
     if table_names:
         if isinstance(table_names, str):
             meta["table_names"] = [table_names]
         elif isinstance(table_names, list):
             meta["table_names"] = [str(t) for t in table_names if t]
+    elif table_name:
+        meta["table_names"] = [str(table_name)]
 
     if sql_description:
         meta["sql_description"] = truncate_words(sql_description, 5)

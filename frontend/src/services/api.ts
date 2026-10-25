@@ -150,6 +150,86 @@ export async function sendQuery(
   return await res.json();
 }
 
+export async function sendQueryStream(
+  query: string,
+  sessionId?: string,
+  attachments?: any[],
+  onStatusUpdate?: (action: string) => void
+): Promise<any> {
+  const payload: Record<string, any> = { query, session_id: sessionId };
+  if (attachments && attachments.length > 0) {
+    payload.attachments = attachments;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/api/query/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const errorMsg = await extractErrorMessage(res, `Query failed with status ${res.status}`);
+      throw new Error(errorMsg);
+    }
+
+    if (!res.body) {
+      throw new Error('ReadableStream not supported by browser');
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.split('\r\n').join('\n').split('\r').join('\n');
+
+      while (buffer.indexOf('\n\n') !== -1) {
+        const idx = buffer.indexOf('\n\n');
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+
+        const lines = block.split('\n');
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6).trim());
+              if (data.type === 'status' && data.action && onStatusUpdate) {
+                onStatusUpdate(data.action);
+              } else if (data.type === 'result') {
+                finalResult = data;
+              } else if (data.type === 'error') {
+                throw new Error(data.error || 'Server error during execution');
+              }
+            } catch (jsonErr: any) {
+              if (jsonErr.message && !jsonErr.message.includes('JSON')) {
+                throw jsonErr;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (finalResult) {
+      return finalResult;
+    }
+  } catch (err: any) {
+    if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('ReadableStream')) {
+      throw err;
+    }
+    console.warn('Streaming failed, falling back to standard query:', err);
+  }
+
+  return await sendQuery(query, sessionId, attachments);
+}
+
 export async function uploadFile(
   file: File,
   sessionId?: string

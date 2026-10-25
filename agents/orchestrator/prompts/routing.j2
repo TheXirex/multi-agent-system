@@ -30,8 +30,7 @@ Recent Conversation Context (last {{ conversation_history | length }} messages):
 
 Active Session Context:
 {% if active_metadata.table_names %}- Current tables in session: {{ active_metadata.table_names }}{% endif %}
-{% if active_metadata.chart_id %}- Current chart_id in memory: {{ active_metadata.chart_id }}{% endif %}
-{% if active_metadata.script_id %}- Current script_id in memory: {{ active_metadata.script_id }}{% endif %}
+{% if active_metadata.dataset_id %}- Active dataset_id in session: {{ active_metadata.dataset_id }}{% endif %}
 {% endif %}
 
 Classification Guidelines:

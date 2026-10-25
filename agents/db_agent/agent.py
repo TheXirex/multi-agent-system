@@ -20,7 +20,7 @@ from agents.db_agent.tools import (
 )
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
-from shared.metadata import truncate_words
+from shared.metadata import build_domain_metadata, truncate_words
 
 logger = logging.getLogger(__name__)
 
@@ -146,14 +146,34 @@ class DBAgent:
                 session_id=session_id,
             )
 
+        all_tables = self.inspector.get_table_names(session_id=session_id)
+        queried_tables: List[str] = []
+        if sql_query:
+            clean_tokens = set(
+                sql_query.lower()
+                .replace("(", " ")
+                .replace(")", " ")
+                .replace(",", " ")
+                .replace(";", " ")
+                .replace('"', " ")
+                .replace("'", " ")
+                .split()
+            )
+            queried_tables = [t for t in all_tables if t.lower() in clean_tokens]
+
+        resolved_table_names = queried_tables or ([table_name] if table_name.lower() in [t.lower() for t in all_tables] else [])
+
         return {
             "response": final_state.get("response", ""),
-            "metadata": {
-                "dataset_id": dataset_id,
-                "script_id": script_id,
-                "table_name": table_name,
-                "sql_description": sql_description,
-            },
+            "metadata": build_domain_metadata(
+                dataset_id=dataset_id,
+                script_id=script_id,
+                sql_script_id=script_id,
+                sql_query=sql_query,
+                table_name=table_name,
+                table_names=resolved_table_names,
+                sql_description=sql_description,
+            ),
         }
 
     def ingest_file(

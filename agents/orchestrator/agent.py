@@ -2,7 +2,7 @@ import asyncio
 import contextvars
 import json
 import logging
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -31,6 +31,7 @@ from agents.orchestrator.utils import (
 )
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
+from shared.tools import get_tool_action_label
 
 logger = logging.getLogger(__name__)
 
@@ -181,10 +182,11 @@ class OrchestratorAgent:
             resp = await self.chat_model.ainvoke(messages)
             direct_text = extract_text_from_message_content(resp.content)
 
+        sess_id = (state.get("active_metadata") or {}).get("session_id") or (state.get("metadata") or {}).get("session_id")
         return {
             "final_response": direct_text,
             "raw_text": "",
-            "metadata": {},
+            "metadata": {"session_id": sess_id} if sess_id else {},
             "execution_results": [],
         }
 
@@ -200,11 +202,10 @@ class OrchestratorAgent:
         step_results: List[StepExecutionResult] = []
         raw_text_parts: List[str] = []
         active_meta = dict(state.get("active_metadata") or {})
-        consolidated_metadata: Dict[str, Any] = dict(active_meta)
+        session_id = active_meta.get("session_id")
+        consolidated_metadata: Dict[str, Any] = {"session_id": session_id} if session_id else {}
         last_dataset_id: Optional[int] = active_meta.get("dataset_id")
         last_exported_csv: Optional[str] = None
-
-        session_id = active_meta.get("session_id")
 
         for step in steps:
             logger.info(f"Executing step {step.step_id}: {step.tool_name}")
@@ -240,6 +241,7 @@ class OrchestratorAgent:
                 last_dataset_id=last_dataset_id,
                 last_exported_csv=last_exported_csv,
             )
+            active_meta.update(consolidated_metadata)
 
         combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
 
@@ -260,7 +262,7 @@ class OrchestratorAgent:
 
         # If a tool (like ML agent) requested user clarification, output the questions directly
         if metadata.get("status") == "clarification_needed":
-            return {"final_response": raw_text}
+            return {"final_response": raw_text, "metadata": metadata}
 
         prompt_content = (
             f"User Question: {user_query}\n\n"
@@ -284,7 +286,7 @@ class OrchestratorAgent:
             logger.error(f"Error synthesizing response in Orchestrator: {exc}")
             final_text = raw_text or "Execution completed."
 
-        return {"final_response": final_text}
+        return {"final_response": final_text, "metadata": metadata}
 
     async def run(
         self,
@@ -314,6 +316,7 @@ class OrchestratorAgent:
             tools = await session.list_tools()
             logger.info(f"Discovered {len(tools)} tools via MCP: {[t.name for t in tools]}")
 
+            sess_id = (active_metadata or {}).get("session_id")
             initial_state: OrchestratorState = {
                 "user_query": user_query,
                 "tools": tools,
@@ -327,7 +330,7 @@ class OrchestratorAgent:
                 "steps": [],
                 "execution_results": [],
                 "raw_text": "",
-                "metadata": dict(active_metadata or {}),
+                "metadata": {"session_id": sess_id} if sess_id else {},
                 "final_response": "",
                 "error": None,
             }
@@ -402,6 +405,171 @@ class OrchestratorAgent:
             conversation_history=history,
             active_metadata=meta,
         )
+
+    async def process_query_stream(
+        self,
+        query: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        active_metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Streaming execution entrypoint yielding real-time step action updates and final result.
+        """
+        meta = dict(active_metadata or {})
+        if session_id:
+            meta["session_id"] = session_id
+
+        yield {
+            "type": "status",
+            "status": "planning",
+            "action": "Planning execution steps...",
+        }
+
+        async with self.mcp_manager.open_session() as session:
+            tools = await session.list_tools()
+            initial_state: OrchestratorState = {
+                "user_query": query,
+                "tools": tools,
+                "conversation_history": history or [],
+                "active_metadata": meta,
+                "is_in_scope": True,
+                "rejection_reason": None,
+                "requires_tools": False,
+                "direct_response": "",
+                "thought": "",
+                "steps": [],
+                "execution_results": [],
+                "raw_text": "",
+                "metadata": {"session_id": session_id} if session_id else {},
+                "final_response": "",
+                "error": None,
+            }
+
+            token = _current_mcp_session.set(session)
+            try:
+                # 1. Route and plan
+                planned_state = await self._route_and_plan_node(initial_state)
+                initial_state.update(planned_state)
+
+                route_decision = self._route_after_planning(initial_state)
+
+                if route_decision == "refusal":
+                    refusal_res = await self._guardrail_refusal_node(initial_state)
+                    yield {
+                        "type": "result",
+                        "response": refusal_res.get("final_response", ""),
+                        "metadata": refusal_res.get("metadata") or ({"session_id": session_id} if session_id else {}),
+                        "session_id": session_id,
+                    }
+                    return
+
+                if route_decision == "direct":
+                    yield {
+                        "type": "status",
+                        "status": "direct",
+                        "action": "Formulating response...",
+                    }
+                    direct_res = await self._direct_response_node(initial_state)
+                    yield {
+                        "type": "result",
+                        "response": direct_res.get("final_response", ""),
+                        "metadata": direct_res.get("metadata") or ({"session_id": session_id} if session_id else {}),
+                        "session_id": session_id,
+                    }
+                    return
+
+                # 2. Execute tools step-by-step, yielding dynamic action labels
+                steps = initial_state.get("steps", [])
+                step_results: List[StepExecutionResult] = []
+                raw_text_parts: List[str] = []
+                active_meta = dict(initial_state.get("active_metadata") or {})
+                sess_id = active_meta.get("session_id")
+                consolidated_metadata: Dict[str, Any] = {"session_id": sess_id} if sess_id else {}
+                last_dataset_id: Optional[int] = active_meta.get("dataset_id")
+                last_exported_csv: Optional[str] = None
+
+                for step in steps:
+                    action_label = get_tool_action_label(step.tool_name)
+                    yield {
+                        "type": "status",
+                        "status": "executing",
+                        "tool_name": step.tool_name,
+                        "step_id": step.step_id,
+                        "action": action_label,
+                    }
+
+                    step_args = resolve_tool_arguments(
+                        tool_name=step.tool_name,
+                        raw_arguments=step.arguments,
+                        active_metadata=active_meta,
+                        session_id=sess_id,
+                        last_dataset_id=last_dataset_id,
+                        last_exported_csv=last_exported_csv,
+                    )
+
+                    result = await session.call_tool(
+                        tool_name=step.tool_name,
+                        arguments=step_args,
+                        step_id=step.step_id,
+                    )
+                    step_results.append(result)
+
+                    if not result.success:
+                        logger.warning(f"Step {step.step_id} failed: {result.error}")
+                        raw_text_parts.append(f"[Step {step.step_id} - Error]: {result.error}")
+                        continue
+
+                    step_text = extract_step_text(result)
+                    if step_text:
+                        raw_text_parts.append(step_text)
+
+                    last_dataset_id, last_exported_csv = consolidate_step_metadata(
+                        result=result,
+                        consolidated_metadata=consolidated_metadata,
+                        last_dataset_id=last_dataset_id,
+                        last_exported_csv=last_exported_csv,
+                    )
+                    active_meta.update(consolidated_metadata)
+
+                combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
+                initial_state["execution_results"] = step_results
+                initial_state["raw_text"] = combined_raw
+                initial_state["metadata"] = consolidated_metadata
+
+                # 3. Check if clarification is needed (e.g. from modify_table or ingest_file)
+                clarification_response = None
+                for res in step_results:
+                    data = res.structured_data if isinstance(res.structured_data, dict) else {}
+                    if data.get("status") == "clarification_needed":
+                        clarification_response = data.get("response") or data.get("message")
+                        break
+
+                if clarification_response:
+                    yield {
+                        "type": "result",
+                        "response": clarification_response,
+                        "metadata": consolidated_metadata,
+                        "session_id": session_id,
+                    }
+                    return
+
+                # 4. Synthesize final response
+                yield {
+                    "type": "status",
+                    "status": "synthesizing",
+                    "action": "Synthesizing response...",
+                }
+                synth_res = await self._synthesize_response_node(initial_state)
+                final_meta = synth_res.get("metadata") or initial_state.get("metadata") or consolidated_metadata or {}
+                yield {
+                    "type": "result",
+                    "response": synth_res.get("final_response", ""),
+                    "metadata": final_meta,
+                    "session_id": session_id,
+                }
+            finally:
+                _current_mcp_session.reset(token)
 
 
 

@@ -18,6 +18,10 @@ export interface MessageMetadata {
   chart_id?: number | null;
   chart_ids?: number[];
   script_id?: number | null;
+  sql_script_id?: number | null;
+  python_script_id?: number | null;
+  sql_query?: string | null;
+  code?: string | null;
   code_title?: string | null;
   task_description?: string | null;
   table_names?: string[];

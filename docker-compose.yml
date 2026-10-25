@@ -41,6 +41,7 @@ services:
     volumes:
       - ./agents:/app/agents
       - ./shared:/app/shared
+      - ./scripts:/app/scripts
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,6 +68,7 @@ services:
       - ./backend:/app/backend
       - ./shared:/app/shared
       - ./agents:/app/agents
+      - ./scripts:/app/scripts
     depends_on:
       postgres:
         condition: service_healthy

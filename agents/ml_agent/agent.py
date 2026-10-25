@@ -37,6 +37,7 @@ class MLAgentState(TypedDict):
     dataset_ids: Optional[List[int]]
     table_names: Optional[List[str]]
     session_id: Optional[str]
+    sql_query: Optional[str]
     in_memory_datasets: Dict[str, Any]
     is_multi_dataset: bool
     copy_instructions: str
@@ -50,6 +51,78 @@ class MLAgentState(TypedDict):
     success: bool
     needs_clarification: bool
     clarification_questions: List[Dict[str, Any]]
+
+
+def _is_color_title(val: Any) -> bool:
+    if not isinstance(val, str):
+        return False
+    s = val.strip().lower()
+    if s.startswith("<b>") and s.endswith("</b>"):
+        s = s[3:-4].strip()
+    if s.startswith("<span>") and s.endswith("</span>"):
+        s = s[6:-7].strip()
+    return s in ("color", "colour", "color:", "colour:")
+
+
+def _clean_chart_spec(spec: Dict[str, Any]) -> None:
+    if not isinstance(spec, dict):
+        return
+
+    layout = spec.get("layout")
+    if isinstance(layout, dict):
+        # Clear title inside the Plotly canvas so it is rendered in the external card header only
+        if "title" in layout:
+            if isinstance(layout["title"], dict):
+                layout["title"]["text"] = ""
+            else:
+                layout["title"] = ""
+
+        legend = layout.get("legend")
+        if isinstance(legend, dict):
+            lt = legend.get("title")
+            if isinstance(lt, dict):
+                if _is_color_title(lt.get("text")):
+                    lt["text"] = ""
+            elif _is_color_title(lt):
+                legend["title"] = ""
+
+        if _is_color_title(layout.get("legend_title_text")):
+            layout["legend_title_text"] = ""
+
+        legend_title = layout.get("legend_title")
+        if isinstance(legend_title, dict):
+            if _is_color_title(legend_title.get("text")):
+                legend_title["text"] = ""
+        elif _is_color_title(legend_title):
+            layout["legend_title"] = ""
+
+        template = layout.get("template")
+        if isinstance(template, dict):
+            t_layout = template.get("layout")
+            if isinstance(t_layout, dict):
+                t_legend = t_layout.get("legend")
+                if isinstance(t_legend, dict):
+                    t_lt = t_legend.get("title")
+                    if isinstance(t_lt, dict) and _is_color_title(t_lt.get("text")):
+                        t_lt["text"] = ""
+                    elif _is_color_title(t_lt):
+                        t_legend["title"] = ""
+                if _is_color_title(t_layout.get("legend_title_text")):
+                    t_layout["legend_title_text"] = ""
+
+    data = spec.get("data")
+    if isinstance(data, list):
+        for trace in data:
+            if isinstance(trace, dict):
+                marker = trace.get("marker")
+                if isinstance(marker, dict):
+                    colorbar = marker.get("colorbar")
+                    if isinstance(colorbar, dict):
+                        cb_title = colorbar.get("title")
+                        if isinstance(cb_title, dict) and _is_color_title(cb_title.get("text")):
+                            cb_title["text"] = ""
+                        elif _is_color_title(cb_title):
+                            colorbar["title"] = ""
 
 
 class MLAgent:
@@ -148,13 +221,14 @@ class MLAgent:
         table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
         **kwargs: Any,
-    ) -> Tuple[Dict[str, pd.DataFrame], Optional[int], List[int]]:
+    ) -> Tuple[Dict[str, pd.DataFrame], Optional[int], List[int], Optional[str]]:
         """
         Loads dataset records directly into memory as pandas DataFrames without writing CSVs to disk.
         Supports single and multiple datasets, scoped strictly to the given session_id when provided.
         Prioritizes querying the actual relational SQL table in the session schema.
         """
         loaded_dfs: Dict[str, pd.DataFrame] = {}
+        executed_sql: Optional[str] = None
 
         # 1. Normalize table_names
         resolved_tables: List[str] = []
@@ -176,6 +250,8 @@ class MLAgent:
                         loaded_dfs[clean_var] = df
                         if "data" not in loaded_dfs:
                             loaded_dfs["data"] = df
+                queries = [f'SELECT * FROM "{target_schema}"."{t}"' for t in resolved_tables]
+                executed_sql = ";\n".join(queries) + ";"
             except Exception as ex:
                 logger.warning(f"Failed to load table(s) {resolved_tables} from schema '{target_schema}': {ex}")
 
@@ -216,12 +292,15 @@ class MLAgent:
                         loaded_dfs[clean_var] = df
                         if "data" not in loaded_dfs:
                             loaded_dfs["data"] = df
+                    if schema_tables:
+                        queries = [f'SELECT * FROM "{target_schema}"."{t}"' for t in schema_tables]
+                        executed_sql = ";\n".join(queries) + ";"
             except Exception as ex:
                 logger.debug(f"Could not load tables from schema '{target_schema}': {ex}")
 
         actual_ids: List[int] = []
         primary_id = None
-        return loaded_dfs, primary_id, actual_ids
+        return loaded_dfs, primary_id, actual_ids, executed_sql
 
     async def _prepare_dataset_node(self, state: MLAgentState) -> Dict[str, Any]:
         """
@@ -233,7 +312,7 @@ class MLAgent:
         table_names = state.get("table_names")
         sess_id = state.get("session_id")
 
-        loaded_dfs, matched_id, all_ids = self._resolve_in_memory_datasets(
+        loaded_dfs, matched_id, all_ids, executed_sql = self._resolve_in_memory_datasets(
             given_path=given_path,
             given_id=given_id,
             given_ids=given_ids,
@@ -295,6 +374,7 @@ class MLAgent:
             "copy_instructions": "\n".join(copy_stmts),
             "dataset_preview": "\n".join(preview_sections),
             "resolved_path": "",
+            "sql_query": state.get("sql_query") or executed_sql or "",
         }
 
     async def _check_clarity_node(self, state: MLAgentState) -> Dict[str, Any]:
@@ -565,79 +645,6 @@ class MLAgent:
             "response": summary_text,
         }
 
-def _is_color_title(val: Any) -> bool:
-    if not isinstance(val, str):
-        return False
-    s = val.strip().lower()
-    if s.startswith("<b>") and s.endswith("</b>"):
-        s = s[3:-4].strip()
-    if s.startswith("<span>") and s.endswith("</span>"):
-        s = s[6:-7].strip()
-    return s in ("color", "colour", "color:", "colour:")
-
-
-def _clean_chart_spec(spec: Dict[str, Any]) -> None:
-    if not isinstance(spec, dict):
-        return
-
-    layout = spec.get("layout")
-    if isinstance(layout, dict):
-        # Clear title inside the Plotly canvas so it is rendered in the external card header only
-        if "title" in layout:
-            if isinstance(layout["title"], dict):
-                layout["title"]["text"] = ""
-            else:
-                layout["title"] = ""
-
-        legend = layout.get("legend")
-        if isinstance(legend, dict):
-            lt = legend.get("title")
-            if isinstance(lt, dict):
-                if _is_color_title(lt.get("text")):
-                    lt["text"] = ""
-            elif _is_color_title(lt):
-                legend["title"] = ""
-
-        if _is_color_title(layout.get("legend_title_text")):
-            layout["legend_title_text"] = ""
-
-        legend_title = layout.get("legend_title")
-        if isinstance(legend_title, dict):
-            if _is_color_title(legend_title.get("text")):
-                legend_title["text"] = ""
-        elif _is_color_title(legend_title):
-            layout["legend_title"] = ""
-
-        template = layout.get("template")
-        if isinstance(template, dict):
-            t_layout = template.get("layout")
-            if isinstance(t_layout, dict):
-                t_legend = t_layout.get("legend")
-                if isinstance(t_legend, dict):
-                    t_lt = t_legend.get("title")
-                    if isinstance(t_lt, dict) and _is_color_title(t_lt.get("text")):
-                        t_lt["text"] = ""
-                    elif _is_color_title(t_lt):
-                        t_legend["title"] = ""
-                if _is_color_title(t_layout.get("legend_title_text")):
-                    t_layout["legend_title_text"] = ""
-
-    data = spec.get("data")
-    if isinstance(data, list):
-        for trace in data:
-            if isinstance(trace, dict):
-                marker = trace.get("marker")
-                if isinstance(marker, dict):
-                    colorbar = marker.get("colorbar")
-                    if isinstance(colorbar, dict):
-                        cb_title = colorbar.get("title")
-                        if isinstance(cb_title, dict) and _is_color_title(cb_title.get("text")):
-                            cb_title["text"] = ""
-                        elif _is_color_title(cb_title):
-                            colorbar["title"] = ""
-
-
-
     def _save_charts_to_db(
         self,
         charts: List[Dict[str, Any]],
@@ -801,6 +808,7 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
             "dataset_ids": dataset_ids,
             "table_names": resolved_tables,
             "session_id": session_id,
+            "sql_query": kwargs.get("sql_query") or "",
             "in_memory_datasets": {},
             "is_multi_dataset": False,
             "copy_instructions": "df = data.copy()",
@@ -857,11 +865,14 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
             metadata = build_domain_metadata(
                 chart_ids=chart_ids,
                 script_id=script_id,
+                python_script_id=script_id,
                 dataset_id=resolved_dataset_id,
                 dataset_ids=resolved_dataset_ids,
+                table_names=final_state.get("table_names"),
                 code=code_script,
                 code_title=code_title,
                 task_description=code_title,
+                sql_query=final_state.get("sql_query") or kwargs.get("sql_query") or None,
             )
 
             return {

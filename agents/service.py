@@ -6,12 +6,15 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from typing import Any, Dict, List, Optional
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uvicorn
 
 from agents.orchestrator import FinalOrchestratorResult, OrchestratorAgent, build_orchestrator
+from shared.tools import get_tool_action_label
 
 logger = logging.getLogger("agents.service")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -85,6 +88,7 @@ async def list_tools() -> Dict[str, Any]:
                 {
                     "name": t.name,
                     "description": t.description,
+                    "action_label": get_tool_action_label(t.name),
                     "server": t.server_name,
                     "input_schema": t.input_schema,
                 }
@@ -114,6 +118,30 @@ async def process_query(req: ProcessQueryRequest) -> ProcessQueryResponse:
     except Exception as exc:
         logger.error(f"Error processing query in AI service: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/process/stream")
+async def process_query_stream_endpoint(req: ProcessQueryRequest):
+    """
+    Server-Sent Events (SSE) streaming endpoint yielding real-time tool action labels
+    and the final structured response.
+    """
+    orchestrator = get_orchestrator()
+
+    async def event_generator():
+        try:
+            async for event in orchestrator.process_query_stream(
+                query=req.query,
+                history=req.history,
+                active_metadata=req.active_metadata,
+                session_id=req.session_id,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as exc:
+            logger.error(f"Error in process_query_stream: {exc}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 def main() -> None:

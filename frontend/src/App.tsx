@@ -32,6 +32,7 @@ export function App() {
   const [turns, setTurns] = useState<TurnArtifacts[]>([]);
   const [currentTurnIndex, setCurrentTurnIndex] = useState(0);
   const [isBusy, setIsBusy] = useState(false);
+  const [currentAction, setCurrentAction] = useState<string | null>(null);
 
   // Scroll to assistant message card in chat
   const handleScrollToMessage = useCallback((turnIndex: number) => {
@@ -49,11 +50,13 @@ export function App() {
   // Load a session's messages and hydrate artifacts
   const loadSession = useCallback(async (sessionId: string) => {
     setIsBusy(true);
+    setCurrentAction('Loading session history...');
     setCurrentSessionId(sessionId);
 
     const detail = await api.getSessionDetail(sessionId);
     if (!detail) {
       setIsBusy(false);
+      setCurrentAction(null);
       return;
     }
 
@@ -98,15 +101,25 @@ export function App() {
           if (ch) chartsData.push(ch);
         }
 
-        // Fetch scripts
-        let pythonScript: string | null = null;
-        let sqlQuery: string | null = datasetData?.query || null;
+        // Resolve Python script and SQL query
+        let pythonScript: string | null = meta.code || null;
+        let sqlQuery: string | null = meta.sql_query || datasetData?.query || null;
 
-        if (meta.script_id) {
-          const sc = await api.fetchScript(meta.script_id);
+        const pythonScriptId = meta.python_script_id || (meta.script_id && !meta.sql_script_id ? meta.script_id : null);
+        if (!pythonScript && pythonScriptId) {
+          const sc = await api.fetchScript(pythonScriptId);
+          if (sc && sc.script) {
+            if (sc.language === 'python') pythonScript = sc.script;
+            else if (sc.language === 'sql' && !sqlQuery) sqlQuery = sc.script;
+          }
+        }
+
+        const sqlScriptId = meta.sql_script_id || (meta.script_id && meta.script_id !== pythonScriptId ? meta.script_id : null);
+        if (!sqlQuery && sqlScriptId) {
+          const sc = await api.fetchScript(sqlScriptId);
           if (sc && sc.script) {
             if (sc.language === 'sql') sqlQuery = sc.script;
-            else pythonScript = sc.script;
+            else if (sc.language === 'python' && !pythonScript) pythonScript = sc.script;
           }
         }
 
@@ -153,6 +166,7 @@ export function App() {
     setTurns(loadedTurns);
     setCurrentTurnIndex(loadedTurns.length);
     setIsBusy(false);
+    setCurrentAction(null);
   }, []);
 
   // Initial load: fetch sessions
@@ -214,6 +228,7 @@ export function App() {
     try {
       // 1. File Upload Flow
       if (attachedFile) {
+        setCurrentAction('Ingesting dataset...');
         const userMsg: Message = {
           role: 'user',
           content: text || `Uploaded file: ${attachedFile.name}`,
@@ -269,13 +284,19 @@ export function App() {
       }
       // 2. Normal Query Flow
       else {
+        setCurrentAction('Planning execution steps...');
         const userMsg: Message = {
           role: 'user',
           content: text,
         };
         setMessages((prev) => [...prev, userMsg]);
 
-        const queryRes = await api.sendQuery(text, currentSessionId || undefined);
+        const queryRes = await api.sendQueryStream(
+          text,
+          currentSessionId || undefined,
+          undefined,
+          (action) => setCurrentAction(action)
+        );
         const responseText = queryRes.response || 'No response generated.';
         const meta = queryRes.metadata || {};
 
@@ -293,14 +314,25 @@ export function App() {
           if (ch) chartsData.push(ch);
         }
 
-        let pythonScript: string | null = null;
-        let sqlQuery: string | null = dsData?.query || null;
+        // Resolve Python script and SQL query
+        let pythonScript: string | null = meta.code || null;
+        let sqlQuery: string | null = meta.sql_query || dsData?.query || null;
 
-        if (meta.script_id) {
-          const sc = await api.fetchScript(meta.script_id);
+        const pythonScriptId = meta.python_script_id || (meta.script_id && !meta.sql_script_id ? meta.script_id : null);
+        if (!pythonScript && pythonScriptId) {
+          const sc = await api.fetchScript(pythonScriptId);
+          if (sc && sc.script) {
+            if (sc.language === 'python') pythonScript = sc.script;
+            else if (sc.language === 'sql' && !sqlQuery) sqlQuery = sc.script;
+          }
+        }
+
+        const sqlScriptId = meta.sql_script_id || (meta.script_id && meta.script_id !== pythonScriptId ? meta.script_id : null);
+        if (!sqlQuery && sqlScriptId) {
+          const sc = await api.fetchScript(sqlScriptId);
           if (sc && sc.script) {
             if (sc.language === 'sql') sqlQuery = sc.script;
-            else pythonScript = sc.script;
+            else if (sc.language === 'python' && !pythonScript) pythonScript = sc.script;
           }
         }
 
@@ -353,6 +385,7 @@ export function App() {
       setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsBusy(false);
+      setCurrentAction(null);
     }
   };
 
@@ -382,6 +415,7 @@ export function App() {
           <Chat
             messages={messages}
             isBusy={isBusy}
+            currentAction={currentAction}
             onSendQuery={handleSendQuery}
             currentTurnIndex={currentTurnIndex}
             turnsCount={turns.length}

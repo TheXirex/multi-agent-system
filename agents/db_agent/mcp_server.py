@@ -80,9 +80,13 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         Returns:
             Dict[str, Any]: Dictionary containing schema summary text and list of table names.
         """
+        tables = agent.inspector.get_table_names(session_id=session_id)
         return {
-            "tables": agent.inspector.get_table_names(session_id=session_id),
+            "tables": tables,
             "schema": agent.inspector.get_schema_summary(session_id=session_id),
+            "metadata": {
+                "table_names": tables,
+            },
         }
 
     @server.tool(

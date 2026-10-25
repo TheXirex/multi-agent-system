@@ -60,6 +60,47 @@ def consolidate_metadata(
                     except (ValueError, TypeError):
                         pass
 
+        # Preserve and assign SQL / Python script IDs specifically
+        if source.get("sql_query"):
+            target_metadata["sql_query"] = source["sql_query"]
+        if source.get("sql_script_id"):
+            target_metadata["sql_script_id"] = source["sql_script_id"]
+        elif not source.get("code") and (source.get("sql_description") or source.get("sql_query")) and source.get("script_id") is not None:
+            target_metadata["sql_script_id"] = source["script_id"]
+
+        if source.get("python_script_id"):
+            target_metadata["python_script_id"] = source["python_script_id"]
+        elif source.get("code") and source.get("script_id") is not None:
+            target_metadata["python_script_id"] = source["script_id"]
+
+        # Normalize and guarantee table_names presence
+        t_names = source.get("table_names")
+        if t_names:
+            if isinstance(t_names, list):
+                target_metadata["table_names"] = [str(x) for x in t_names if x]
+            elif isinstance(t_names, str):
+                target_metadata["table_names"] = [t_names]
+        elif "table_name" in source and source.get("table_name"):
+            t_name = str(source["table_name"]).strip()
+            if t_name and "table_names" not in target_metadata:
+                target_metadata["table_names"] = [t_name]
+
+        # Normalize and guarantee chart_ids presence
+        c_ids = source.get("chart_ids")
+        if c_ids:
+            if isinstance(c_ids, list):
+                target_metadata["chart_ids"] = [int(x) for x in c_ids if x is not None]
+                if "chart_id" not in target_metadata and target_metadata["chart_ids"]:
+                    target_metadata["chart_id"] = target_metadata["chart_ids"][0]
+            elif isinstance(c_ids, int):
+                target_metadata["chart_ids"] = [c_ids]
+                target_metadata["chart_id"] = c_ids
+        elif source.get("chart_id") is not None:
+            cid = int(source["chart_id"])
+            target_metadata["chart_id"] = cid
+            if "chart_ids" not in target_metadata:
+                target_metadata["chart_ids"] = [cid]
+
         file_path = source.get("file_path")
         if file_path:
             last_exported_csv = str(file_path).strip()
@@ -116,10 +157,23 @@ def resolve_tool_arguments(
         if (not val or val.lower() in {"", "latest", "{{csv}}", "{{previous_step_csv}}", "{{file_path}}"}) and last_exported_csv:
             step_args["dataset_path"] = last_exported_csv
 
-    # 5. Dynamic table_names injection
-    if "table_names" not in step_args:
+    # 5. Dynamic table_names injection and normalization
+    for alias in ("table", "tables", "table_name"):
+        if alias in step_args and "table_names" not in step_args:
+            tn = step_args.pop(alias)
+            if tn:
+                step_args["table_names"] = [tn] if isinstance(tn, str) else list(tn)
+
+    if "table_names" in step_args:
+        if isinstance(step_args["table_names"], str):
+            step_args["table_names"] = [step_args["table_names"]]
+    else:
         tbls = active_meta.get("table_names")
         if tbls:
             step_args["table_names"] = tbls if isinstance(tbls, list) else [tbls]
+
+    # 6. Dynamic sql_query injection if available in session
+    if "sql_query" not in step_args and active_meta.get("sql_query") and tool_name in ("run_ml_analysis", "ml_analysis"):
+        step_args["sql_query"] = active_meta["sql_query"]
 
     return step_args

@@ -17,6 +17,7 @@ interface ChatProps {
   onSelectTurn: (turnIndex: number) => void;
   currentTurnIndex?: number;
   turnsCount?: number;
+  currentAction?: string | null;
 }
 
 const DEFAULT_SUGGESTIONS = [
@@ -33,6 +34,7 @@ export const Chat: React.FC<ChatProps> = ({
   onSelectTurn,
   currentTurnIndex,
   turnsCount,
+  currentAction,
 }) => {
   const [inputText, setInputText] = useState('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -412,7 +414,7 @@ export const Chat: React.FC<ChatProps> = ({
                 animation: 'spin 0.8s linear infinite',
               }}
             />
-            <span>Thinking & executing multi-agent workflow...</span>
+            <span>{currentAction || 'Executing multi-agent workflow...'}</span>
           </div>
         )}
       </div>

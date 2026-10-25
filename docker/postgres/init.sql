@@ -1,40 +1,60 @@
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(100) UNIQUE NOT NULL,
-    country VARCHAR(50) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- Relational Domain Schema
 
 CREATE TABLE IF NOT EXISTS categories (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(50) NOT NULL
+    name VARCHAR(255) UNIQUE NOT NULL,
+    main_category VARCHAR(100) NOT NULL,
+    sub_category VARCHAR(100) NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS products (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    category_id INTEGER REFERENCES categories(id),
-    price NUMERIC(10, 2) NOT NULL,
-    stock INTEGER NOT NULL DEFAULT 0
+    id VARCHAR(50) PRIMARY KEY,
+    name TEXT NOT NULL,
+    category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+    discounted_price NUMERIC(10, 2) NOT NULL,
+    actual_price NUMERIC(10, 2) NOT NULL,
+    discount_percentage NUMERIC(5, 2) NOT NULL,
+    rating NUMERIC(3, 2) NOT NULL,
+    rating_count INTEGER NOT NULL DEFAULT 0,
+    about_product TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id VARCHAR(100) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'status_1',
-    total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    order_id VARCHAR(100) UNIQUE NOT NULL,
+    user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+    product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
+    unit_price NUMERIC(10, 2) NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    total_amount NUMERIC(10, 2) NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'Delivered',
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS product_reviews (
+    id VARCHAR(100) PRIMARY KEY,
+    product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
+    user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+    rating NUMERIC(3, 2) NOT NULL,
+    review_title TEXT,
+    review_content TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS order_items (
-    id SERIAL PRIMARY KEY,
-    order_id INTEGER REFERENCES orders(id),
-    product_id INTEGER REFERENCES products(id),
-    quantity INTEGER NOT NULL,
-    unit_price NUMERIC(10, 2) NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
+CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+CREATE INDEX IF NOT EXISTS idx_orders_product_id ON orders(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_product_id ON product_reviews(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_user_id ON product_reviews(user_id);
 
+-- Internal schema and persistent application storage
 CREATE SCHEMA IF NOT EXISTS internal;
 
 CREATE TABLE IF NOT EXISTS internal.generated_charts (
@@ -91,4 +111,3 @@ CREATE TABLE IF NOT EXISTS internal.change_history (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_change_history_session_id ON internal.change_history(session_id);
-

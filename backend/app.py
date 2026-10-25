@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Backend Gateway Service...")
 
     try:
-        from scripts.generate_data import seed_database
+        from scripts.load_data import seed_database
         engine = get_db()
         with engine.begin() as conn:
             conn.execute(text("""
