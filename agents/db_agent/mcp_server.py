@@ -28,34 +28,44 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             "and returns a structured response containing analysis text and metadata."
         ),
     )
-    def query_and_analyze_database(user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def query_and_analyze_database(
+        user_input: str,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Analyzes database content and returns a structured response with metadata.
 
         Args:
             user_input (str): Natural language instruction or analytical question.
             session_id (Optional[str]): Optional active session ID to bind created resources.
+            trace_id (Optional[str]): Optional distributed trace ID for unified tracing.
+            parent_observation_id (Optional[str]): Optional parent span ID within the trace.
 
         Returns:
             Dict[str, Any]: Structured dictionary containing response and metadata.
         """
-        return agent.query_database_and_analyze(user_input, session_id=session_id)
+        return agent.query_database_and_analyze(
+            user_input,
+            session_id=session_id,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+        )
 
     @server.tool(
         name="execute_sql_to_csv",
         description="Executes a raw SQL query statement against the database and exports results to a CSV file.",
     )
-    def execute_sql_to_csv(query: str, filename: Optional[str] = None, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def execute_sql_to_csv(
+        query: str,
+        filename: Optional[str] = None,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Executes raw SQL query and exports result to CSV.
-
-        Args:
-            query (str): SQL query statement to execute.
-            filename (Optional[str]): Optional custom file name for the CSV export.
-            session_id (Optional[str]): Optional session ID for session schema replica.
-
-        Returns:
-            Dict[str, Any]: Result status, dataset ID, and ID-only metadata.
         """
         result = agent.tools.execute("execute_sql_to_csv", query=query, filename=filename, session_id=session_id)
         return {
@@ -70,15 +80,13 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         name="get_database_schema",
         description="Retrieves the current PostgreSQL schema information including tables, columns, and foreign keys.",
     )
-    def get_database_schema(session_id: Optional[str] = None) -> Dict[str, Any]:
+    def get_database_schema(
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Retrieves formatted database schema details.
-
-        Args:
-            session_id (Optional[str]): Optional active session ID to inspect session replica schema.
-
-        Returns:
-            Dict[str, Any]: Dictionary containing schema summary text and list of table names.
         """
         tables = agent.inspector.get_table_names(session_id=session_id)
         return {
@@ -97,18 +105,21 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             "If the request lacks essential information or is ambiguous, asks clarifying questions instead of guessing."
         ),
     )
-    def modify_database_table(instruction: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def modify_database_table(
+        instruction: str,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Modifies database tables or rows in the session database replica.
-
-        Args:
-            instruction (str): Natural language mutation instruction (e.g. 'Add column phone to users', 'Delete user with id=5').
-            session_id (Optional[str]): Active session ID.
-
-        Returns:
-            Dict[str, Any]: Execution status, applied SQL, and change metadata or clarification questions.
         """
-        return agent.modify_table(instruction=instruction, session_id=session_id)
+        return agent.modify_table(
+            instruction=instruction,
+            session_id=session_id,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+        )
 
     @server.tool(
         name="rollback_database_change",
@@ -117,18 +128,21 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             "Restores previous data or schema state safely using recorded change history."
         ),
     )
-    def rollback_database_change(session_id: Optional[str] = None, target_change_id: Optional[int] = None) -> Dict[str, Any]:
+    def rollback_database_change(
+        session_id: Optional[str] = None,
+        target_change_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Reverts previous database change.
-
-        Args:
-            session_id (Optional[str]): Active session ID.
-            target_change_id (Optional[int]): Optional specific change ID to revert.
-
-        Returns:
-            Dict[str, Any]: Status and description of the rolled back change.
         """
-        return agent.rollback_change(session_id=session_id, target_change_id=target_change_id)
+        return agent.rollback_change(
+            session_id=session_id,
+            target_change_id=target_change_id,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+        )
 
     @server.tool(
         name="ingest_tabular_file",
@@ -142,19 +156,19 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         file_path: str,
         dataset_name: Optional[str] = None,
         session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Ingests a tabular file from disk into PostgreSQL.
-
-        Args:
-            file_path (str): Path to CSV or Excel file on disk.
-            dataset_name (Optional[str]): Optional custom dataset name.
-            session_id (Optional[str]): Optional session ID to bind this dataset exclusively to a chat session.
-
-        Returns:
-            Dict[str, Any]: Ingestion status, metadata, dataset details, or diagnostic error.
         """
-        return agent.ingest_file(file_path=file_path, dataset_name=dataset_name, session_id=session_id)
+        return agent.ingest_file(
+            file_path=file_path,
+            dataset_name=dataset_name,
+            session_id=session_id,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+        )
 
 
 def create_mcp_server(agent: Optional[DBAgent] = None) -> MCPServer:

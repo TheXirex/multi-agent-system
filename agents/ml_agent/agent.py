@@ -17,12 +17,23 @@ from agents.ml_agent.config import MLAgentSettings, get_ml_settings
 from agents.ml_agent.prompts import prompt_loader
 from agents.ml_agent.runner import MLCodeRunner
 from agents.ml_agent.utils.schemas import ClarityQuestion, MLCodeGenerationOutput, TaskClarityOutput
+import contextvars
 from shared.db import apply_session_search_path, get_session_schema_or_public
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 from shared.metadata import build_domain_metadata, truncate_words
+from shared.observability import (
+    create_trace,
+    flush_langfuse,
+    trace_span,
+)
 
 logger = logging.getLogger(__name__)
+
+# Context variable to hold active Langfuse trace for ml_agent
+_current_ml_trace: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_current_ml_trace", default=None
+)
 
 
 class MLAgentState(TypedDict):
@@ -306,116 +317,152 @@ class MLAgent:
         """
         Loads schema, feature types, and data preview for in-memory datasets.
         """
+        trace = _current_ml_trace.get()
         given_path = state.get("dataset_path", "")
         given_id = state.get("dataset_id")
         given_ids = state.get("dataset_ids")
         table_names = state.get("table_names")
         sess_id = state.get("session_id")
 
-        loaded_dfs, matched_id, all_ids, executed_sql = self._resolve_in_memory_datasets(
-            given_path=given_path,
-            given_id=given_id,
-            given_ids=given_ids,
-            table_names=table_names,
-            session_id=sess_id,
-        )
+        with trace_span(
+            "ml_agent.prepare_dataset",
+            parent=trace,
+            input_data={
+                "dataset_id": given_id,
+                "dataset_ids": given_ids,
+                "table_names": table_names,
+                "session_id": sess_id,
+            },
+            metadata={"session_id": sess_id},
+        ) as prep_span:
+            loaded_dfs, matched_id, all_ids, executed_sql = self._resolve_in_memory_datasets(
+                given_path=given_path,
+                given_id=given_id,
+                given_ids=given_ids,
+                table_names=table_names,
+                session_id=sess_id,
+            )
 
-        if not loaded_dfs:
-            loaded_dfs = {"data": pd.DataFrame()}
+            if not loaded_dfs:
+                loaded_dfs = {"data": pd.DataFrame()}
 
-        # Distinguish unique DataFrames
-        unique_dfs: List[Tuple[str, pd.DataFrame]] = []
-        seen_ids = set()
-        for k, v in loaded_dfs.items():
-            df_id = id(v)
-            if df_id not in seen_ids:
-                seen_ids.add(df_id)
-                unique_dfs.append((k, v))
+            # Distinguish unique DataFrames
+            unique_dfs: List[Tuple[str, pd.DataFrame]] = []
+            seen_ids = set()
+            for k, v in loaded_dfs.items():
+                df_id = id(v)
+                if df_id not in seen_ids:
+                    seen_ids.add(df_id)
+                    unique_dfs.append((k, v))
 
-        is_multi = len(unique_dfs) > 1
-        preview_sections = []
-        copy_stmts = []
+            is_multi = len(unique_dfs) > 1
+            preview_sections = []
+            copy_stmts = []
 
-        if not is_multi:
-            var_name, df = unique_dfs[0]
-            loaded_dfs["data"] = df
-            copy_stmts.append("df = data.copy()")
-            preview_sections.append(f"In-memory DataFrame: `data`\nShape: {df.shape[0]} rows, {df.shape[1]} columns")
-            preview_sections.append(f"Columns: {list(df.columns)}")
-            preview_sections.append("Column Data Types:")
-            for col, dt in df.dtypes.items():
-                preview_sections.append(f"- {col}: {dt}")
-            preview_sections.append("First 3 Rows Preview:")
-            preview_sections.append(df.head(3).to_string())
-        else:
-            for idx, (var_name, df) in enumerate(unique_dfs, start=1):
-                idx_var = f"data_{idx}"
-                loaded_dfs[idx_var] = df
-                clean_name = var_name.replace("data_", "")
-                copy_stmts.append(f"df_{clean_name} = {var_name}.copy()  # or {idx_var}.copy()")
-                preview_sections.append(f"--- Dataset #{idx}: `{idx_var}` / `{var_name}` ---")
-                preview_sections.append(f"Shape: {df.shape[0]} rows, {df.shape[1]} columns")
+            if not is_multi:
+                var_name, df = unique_dfs[0]
+                loaded_dfs["data"] = df
+                copy_stmts.append("df = data.copy()")
+                preview_sections.append(f"In-memory DataFrame: `data`\nShape: {df.shape[0]} rows, {df.shape[1]} columns")
                 preview_sections.append(f"Columns: {list(df.columns)}")
                 preview_sections.append("Column Data Types:")
                 for col, dt in df.dtypes.items():
                     preview_sections.append(f"- {col}: {dt}")
-                preview_sections.append("First 2 Rows Preview:")
-                preview_sections.append(df.head(2).to_string())
-                preview_sections.append("")
+                preview_sections.append("First 3 Rows Preview:")
+                preview_sections.append(df.head(3).to_string())
+            else:
+                for idx, (var_name, df) in enumerate(unique_dfs, start=1):
+                    idx_var = f"data_{idx}"
+                    loaded_dfs[idx_var] = df
+                    clean_name = var_name.replace("data_", "")
+                    copy_stmts.append(f"df_{clean_name} = {var_name}.copy()  # or {idx_var}.copy()")
+                    preview_sections.append(f"--- Dataset #{idx}: `{idx_var}` / `{var_name}` ---")
+                    preview_sections.append(f"Shape: {df.shape[0]} rows, {df.shape[1]} columns")
+                    preview_sections.append(f"Columns: {list(df.columns)}")
+                    preview_sections.append("Column Data Types:")
+                    for col, dt in df.dtypes.items():
+                        preview_sections.append(f"- {col}: {dt}")
+                    preview_sections.append("First 2 Rows Preview:")
+                    preview_sections.append(df.head(2).to_string())
+                    preview_sections.append("")
 
-            # Set 'data' as alias to first dataset for safety
-            loaded_dfs["data"] = unique_dfs[0][1]
+                # Set 'data' as alias to first dataset for safety
+                loaded_dfs["data"] = unique_dfs[0][1]
 
-        return {
-            "in_memory_datasets": loaded_dfs,
-            "dataset_id": matched_id,
-            "dataset_ids": all_ids,
-            "is_multi_dataset": is_multi,
-            "copy_instructions": "\n".join(copy_stmts),
-            "dataset_preview": "\n".join(preview_sections),
-            "resolved_path": "",
-            "sql_query": state.get("sql_query") or executed_sql or "",
-        }
+            prep_span.update(
+                output={
+                    "datasets_loaded": list(loaded_dfs.keys()),
+                    "is_multi_dataset": is_multi,
+                    "dataset_id": matched_id,
+                },
+                metadata={
+                    "dataset_id": matched_id,
+                    "dataset_ids": all_ids,
+                },
+            )
+
+            return {
+                "in_memory_datasets": loaded_dfs,
+                "dataset_id": matched_id,
+                "dataset_ids": all_ids,
+                "is_multi_dataset": is_multi,
+                "copy_instructions": "\n".join(copy_stmts),
+                "dataset_preview": "\n".join(preview_sections),
+                "resolved_path": "",
+                "sql_query": state.get("sql_query") or executed_sql or "",
+            }
 
     async def _check_clarity_node(self, state: MLAgentState) -> Dict[str, Any]:
         """
         Evaluates if the user's task description is clear or if specific clarification is needed.
         """
+        trace = _current_ml_trace.get()
         task_desc = state.get("task_description", "")
         dataset_preview = state.get("dataset_preview", "")
 
-        prompt = prompt_loader.render(
-            "task_clarity",
-            task_description=task_desc,
-            dataset_preview=dataset_preview,
-        )
+        with trace_span(
+            "ml_agent.check_clarity",
+            parent=trace,
+            input_data={
+                "task_description": task_desc,
+            },
+            metadata={"session_id": state.get("session_id")},
+        ) as clarity_span:
+            handler = clarity_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
 
-        needs_clarification = False
-        questions: List[Dict[str, Any]] = []
+            prompt = prompt_loader.render(
+                "task_clarity",
+                task_description=task_desc,
+                dataset_preview=dataset_preview,
+            )
 
-        try:
-            structured_model = self.chat_model.with_structured_output(TaskClarityOutput)
-            result = await structured_model.ainvoke([HumanMessage(content=prompt)])
-            if isinstance(result, dict):
-                result = TaskClarityOutput.model_validate(result)
+            needs_clarification = False
+            questions: List[Dict[str, Any]] = []
 
-            if isinstance(result, TaskClarityOutput):
-                needs_clarification = result.needs_clarification
-                questions = [q.model_dump() for q in result.questions]
-        except Exception as ex:
-            logger.warning(f"Structured clarity check failed ({ex}), falling back to standard invoke")
             try:
-                resp = await self.chat_model.ainvoke([HumanMessage(content=prompt)])
-                text_content = extract_text_from_message_content(resp.content).strip()
-                if "{" in text_content and "}" in text_content:
-                    json_str = text_content[text_content.find("{") : text_content.rfind("}") + 1]
-                else:
-                    json_str = text_content
-                data = json.loads(json_str)
-                needs_clarification = bool(data.get("needs_clarification", False))
-                questions = data.get("questions", [])
-            except Exception as fb_err:
-                logger.error(f"Fallback clarity check failed: {fb_err}")
+                structured_model = self.chat_model.with_structured_output(TaskClarityOutput)
+                result = await structured_model.ainvoke([HumanMessage(content=prompt)], config=config)
+                if isinstance(result, dict):
+                    result = TaskClarityOutput.model_validate(result)
+
+                if isinstance(result, TaskClarityOutput):
+                    needs_clarification = result.needs_clarification
+                    questions = [q.model_dump() for q in result.questions]
+            except Exception as ex:
+                logger.warning(f"Structured clarity check failed ({ex}), falling back to standard invoke")
+                try:
+                    resp = await self.chat_model.ainvoke([HumanMessage(content=prompt)], config=config)
+                    text_content = extract_text_from_message_content(resp.content).strip()
+                    if "{" in text_content and "}" in text_content:
+                        json_str = text_content[text_content.find("{") : text_content.rfind("}") + 1]
+                    else:
+                        json_str = text_content
+                    data = json.loads(json_str)
+                    needs_clarification = bool(data.get("needs_clarification", False))
+                    questions = data.get("questions", [])
+                except Exception as fb_err:
+                    logger.error(f"Fallback clarity check failed: {fb_err}")
 
             if needs_clarification and questions:
                 # Clarification is an extreme last resort: ONLY ask when NEITHER the data is understandable
@@ -461,6 +508,9 @@ class MLAgent:
                         updated_task_desc = f"{task_desc}\n\n[{' | '.join(config_notes)}]"
                         logger.info(f"Auto-adopting ML configuration instead of clarifying: {config_notes}")
 
+                    clarity_span.update(
+                        output={"needs_clarification": False, "auto_adopted": True},
+                    )
                     return {
                         "needs_clarification": False,
                         "clarification_questions": [],
@@ -485,18 +535,22 @@ class MLAgent:
                     lines.append("")
 
                 formatted_resp = "\n".join(lines).strip()
+                clarity_span.update(
+                    output={"needs_clarification": True, "questions": questions},
+                )
                 return {
                     "needs_clarification": True,
                     "clarification_questions": questions,
                     "response": formatted_resp,
                 }
-        except Exception as ex:
-            logger.warning(f"Clarity check failed or returned invalid JSON ({ex}), proceeding to code generation")
 
-        return {
-            "needs_clarification": False,
-            "clarification_questions": [],
-        }
+            clarity_span.update(
+                output={"needs_clarification": False},
+            )
+            return {
+                "needs_clarification": False,
+                "clarification_questions": [],
+            }
 
     def _route_after_clarity(self, state: MLAgentState) -> Literal["clarify", "proceed"]:
         """
@@ -510,65 +564,124 @@ class MLAgent:
         """
         Generates Python machine learning code and a concise title (4-5 words max) tailored to the user's task.
         """
-        prompt = prompt_loader.render(
-            "code_generation",
-            task_description=state.get("task_description", ""),
-            dataset_preview=state.get("dataset_preview", ""),
-            is_multi_dataset=state.get("is_multi_dataset", False),
-            copy_instructions=state.get("copy_instructions", "df = data.copy()"),
-        )
+        trace = _current_ml_trace.get()
+        task_desc = state.get("task_description", "")
+        with trace_span(
+            "ml_agent.generate_code",
+            parent=trace,
+            input_data={
+                "task_description": task_desc,
+                "is_multi_dataset": state.get("is_multi_dataset", False),
+            },
+            metadata={
+                "is_multi_dataset": state.get("is_multi_dataset", False),
+            },
+        ) as gen_span:
+            handler = gen_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
 
-        messages = [
-            HumanMessage(content=prompt),
-        ]
+            prompt = prompt_loader.render(
+                "code_generation",
+                task_description=task_desc,
+                dataset_preview=state.get("dataset_preview", ""),
+                is_multi_dataset=state.get("is_multi_dataset", False),
+                copy_instructions=state.get("copy_instructions", "df = data.copy()"),
+            )
 
-        code = ""
-        code_title = ""
-        try:
-            structured_model = self.chat_model.with_structured_output(MLCodeGenerationOutput)
-            result = await structured_model.ainvoke(messages)
-            if isinstance(result, dict):
-                result = MLCodeGenerationOutput.model_validate(result)
+            messages = [
+                HumanMessage(content=prompt),
+            ]
 
-            if isinstance(result, MLCodeGenerationOutput):
-                code = self._extract_python_code(result.code)
-                code_title = truncate_words(result.code_title.strip(), max_words=5)
-        except Exception as ex:
-            logger.warning(f"Structured ML code generation failed ({ex}), falling back to direct invoke")
+            code = ""
+            code_title = ""
+            try:
+                structured_model = self.chat_model.with_structured_output(MLCodeGenerationOutput)
+                result = await structured_model.ainvoke(messages, config=config)
+                if isinstance(result, dict):
+                    result = MLCodeGenerationOutput.model_validate(result)
 
-        if not code:
-            resp = await self.chat_model.ainvoke(messages)
-            content = extract_text_from_message_content(resp.content)
-            code = self._extract_python_code(content)
+                if isinstance(result, MLCodeGenerationOutput):
+                    code = self._extract_python_code(result.code)
+                    code_title = truncate_words(result.code_title.strip(), max_words=5)
+            except Exception as ex:
+                logger.warning(f"Structured ML code generation failed ({ex}), falling back to direct invoke")
 
-        if not code_title:
-            desc = state.get("task_description", "")
-            task_words = "".join(c for c in desc if c.isalnum() or c.isspace()).split()
-            code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
-        else:
-            code_title = truncate_words(code_title, max_words=5)
+            if not code:
+                resp = await self.chat_model.ainvoke(messages, config=config)
+                content = extract_text_from_message_content(resp.content)
+                code = self._extract_python_code(content)
 
-        clean_code = code.strip()
+            if not code_title:
+                task_words = "".join(c for c in task_desc if c.isalnum() or c.isspace()).split()
+                code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
+            else:
+                code_title = truncate_words(code_title, max_words=5)
 
-        return {
-            "current_code": clean_code,
-            "code_title": code_title,
-        }
+            clean_code = code.strip()
+
+            gen_span.update(
+                output={
+                    "code_title": code_title,
+                    "code_length": len(clean_code),
+                    "code_preview": clean_code[:200],
+                },
+                metadata={
+                    "code_title": code_title,
+                },
+            )
+
+            return {
+                "current_code": clean_code,
+                "code_title": code_title,
+            }
 
     async def _execute_code_node(self, state: MLAgentState) -> Dict[str, Any]:
         """
         Executes current code in the isolated subprocess runner with in-memory datasets.
         """
+        trace = _current_ml_trace.get()
         code = state.get("current_code", "")
         in_memory_dfs = state.get("in_memory_datasets", {})
-        res = await self.runner.run_code(code, in_memory_datasets=in_memory_dfs)
 
-        return {
-            "execution_result": res,
-            "error_trace": res.get("error_trace", ""),
-            "success": res.get("success", False),
-            "current_code": res.get("code", code),
-        }
+        with trace_span(
+            "ml_agent.execute_code",
+            parent=trace,
+            input_data={
+                "code_length": len(code),
+                "in_memory_datasets": list(in_memory_dfs.keys()),
+            },
+            metadata={
+                "code_title": state.get("code_title", ""),
+            },
+        ) as exec_span:
+            res = await self.runner.run_code(code, in_memory_datasets=in_memory_dfs)
+            success = res.get("success", False)
+
+            if not success:
+                exec_span.update(
+                    level="WARNING",
+                    status_message=res.get("error_trace", "")[:300] or "Execution encountered an error",
+                    output={
+                        "success": False,
+                        "error_trace": res.get("error_trace", "")[:500],
+                    },
+                )
+            else:
+                exec_span.update(
+                    output={
+                        "success": True,
+                        "stdout_length": len(res.get("stdout", "")),
+                        "charts_count": len(res.get("charts", [])),
+                        "plots_count": len(res.get("plots", [])),
+                    },
+                )
+
+            return {
+                "execution_result": res,
+                "error_trace": res.get("error_trace", ""),
+                "success": success,
+                "current_code": res.get("code", code),
+            }
 
     def _route_after_execution(self, state: MLAgentState) -> Literal["repair", "summarize"]:
         """
@@ -582,68 +695,116 @@ class MLAgent:
         """
         Self-healing node: debugs and repairs code based on execution traceback.
         """
+        trace = _current_ml_trace.get()
         current_retries = state.get("retry_count", 0) + 1
         logger.info(f"MLAgent self-healing repair attempt {current_retries}/{self.max_retries}")
 
-        prompt = prompt_loader.render(
-            "code_repair",
-            task_description=state.get("task_description", ""),
-            dataset_preview=state.get("dataset_preview", ""),
-            current_code=state.get("current_code", ""),
-            error_trace=state.get("error_trace", ""),
-            is_multi_dataset=state.get("is_multi_dataset", False),
-            copy_instructions=state.get("copy_instructions", "df = data.copy()"),
-        )
+        with trace_span(
+            "ml_agent.code_repair",
+            parent=trace,
+            input_data={
+                "attempt": current_retries,
+                "retry_count": current_retries,
+                "error_trace": state.get("error_trace", "")[:500],
+            },
+            metadata={
+                "attempt": current_retries,
+                "retry_count": current_retries,
+            },
+        ) as rep_span:
+            handler = rep_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
 
-        messages = [
-            HumanMessage(content=prompt),
-        ]
-        resp = await self.chat_model.ainvoke(messages)
-        content = extract_text_from_message_content(resp.content)
-        fixed_code = self._extract_python_code(content)
-        clean_fixed_code = fixed_code.strip()
+            prompt = prompt_loader.render(
+                "code_repair",
+                task_description=state.get("task_description", ""),
+                dataset_preview=state.get("dataset_preview", ""),
+                current_code=state.get("current_code", ""),
+                error_trace=state.get("error_trace", ""),
+                is_multi_dataset=state.get("is_multi_dataset", False),
+                copy_instructions=state.get("copy_instructions", "df = data.copy()"),
+            )
 
-        return {
-            "current_code": clean_fixed_code,
-            "retry_count": current_retries,
-            "code_title": state.get("code_title", ""),
-        }
+            messages = [
+                HumanMessage(content=prompt),
+            ]
+            resp = await self.chat_model.ainvoke(messages, config=config)
+            content = extract_text_from_message_content(resp.content)
+            fixed_code = self._extract_python_code(content)
+            clean_fixed_code = fixed_code.strip()
+
+            rep_span.update(
+                output={
+                    "repaired_code_length": len(clean_fixed_code),
+                },
+            )
+
+            return {
+                "current_code": clean_fixed_code,
+                "retry_count": current_retries,
+                "code_title": state.get("code_title", ""),
+            }
 
     async def _summarize_results_node(self, state: MLAgentState) -> Dict[str, Any]:
         """
         Synthesizes final analytical summary from code output and generated Plotly charts.
         """
+        trace = _current_ml_trace.get()
         exec_res = state.get("execution_result", {})
         stdout = exec_res.get("stdout", "")
         charts = exec_res.get("charts", [])
         plots = exec_res.get("plots", [])
         success = state.get("success", False)
 
-        if not success:
-            error_summary = (
-                f"### Machine Learning Execution Failed\n\n"
-                f"The generated code could not execute successfully after {state.get('retry_count', 0)} attempts.\n\n"
-                f"**Error Details:**\n```\n{state.get('error_trace', '')}\n```"
+        with trace_span(
+            "ml_agent.summarize_results",
+            parent=trace,
+            input_data={
+                "success": success,
+                "charts_count": len(charts),
+                "plots_count": len(plots),
+            },
+            metadata={
+                "success": success,
+            },
+        ) as sum_span:
+            if not success:
+                error_summary = (
+                    f"### Machine Learning Execution Failed\n\n"
+                    f"The generated code could not execute successfully after {state.get('retry_count', 0)} attempts.\n\n"
+                    f"**Error Details:**\n```\n{state.get('error_trace', '')}\n```"
+                )
+                sum_span.update(
+                    level="ERROR",
+                    output={"error_summary": error_summary},
+                )
+                return {"response": error_summary}
+
+            prompt = prompt_loader.render(
+                "summary",
+                task_description=state.get("task_description", ""),
+                stdout=stdout,
+                charts=charts,
+                plots=plots,
             )
-            return {"response": error_summary}
 
-        prompt = prompt_loader.render(
-            "summary",
-            task_description=state.get("task_description", ""),
-            stdout=stdout,
-            charts=charts,
-            plots=plots,
-        )
+            messages = [
+                HumanMessage(content=prompt),
+            ]
 
-        messages = [
-            HumanMessage(content=prompt),
-        ]
-        resp = await self.chat_model.ainvoke(messages)
-        summary_text = extract_text_from_message_content(resp.content)
+            handler = sum_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
 
-        return {
-            "response": summary_text,
-        }
+            resp = await self.chat_model.ainvoke(messages, config=config)
+            summary_text = extract_text_from_message_content(resp.content)
+
+            sum_span.update(
+                output={"response": summary_text},
+            )
+
+            return {
+                "response": summary_text,
+            }
 
     def _save_charts_to_db(
         self,
@@ -776,6 +937,8 @@ class MLAgent:
         dataset_ids: Optional[List[int]] = None,
         table_names: Optional[Any] = None,
         session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
@@ -789,6 +952,8 @@ class MLAgent:
             dataset_ids (Optional[List[int]]): Optional list of multiple dataset identifiers.
             table_names (Optional[Union[List[str], str]]): Relational database table name or list of table names.
             session_id (Optional[str]): Optional session ID to bind and scope the analysis.
+            trace_id (Optional[str]): Distributed trace ID to bind execution.
+            parent_observation_id (Optional[str]): Parent observation ID within the trace.
 
         Returns:
             Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
@@ -825,18 +990,63 @@ class MLAgent:
             "clarification_questions": [],
         }
 
+        if trace_id:
+            parent_scope = trace_span(
+                name="ml_agent.run_ml_analysis",
+                trace_id=trace_id,
+                parent_observation_id=parent_observation_id,
+                input_data={
+                    "task_description": task_description,
+                    "dataset_id": dataset_id,
+                    "dataset_ids": dataset_ids,
+                    "table_names": resolved_tables,
+                    "session_id": session_id,
+                },
+                metadata={
+                    "session_id": session_id,
+                    "dataset_id": dataset_id,
+                },
+            )
+            span_or_trace = parent_scope.__enter__()
+        else:
+            parent_scope = None
+            span_or_trace = create_trace(
+                name="ml_agent.run_ml_analysis",
+                session_id=session_id,
+                input_data={
+                    "task_description": task_description,
+                    "dataset_id": dataset_id,
+                    "dataset_ids": dataset_ids,
+                    "table_names": resolved_tables,
+                    "session_id": session_id,
+                },
+                metadata={
+                    "session_id": session_id,
+                    "dataset_id": dataset_id,
+                },
+                tags=["ml_agent"],
+            )
+
+        trace_token = _current_ml_trace.set(span_or_trace)
+
         try:
             final_state = await self.graph.ainvoke(initial_state)
 
             if final_state.get("needs_clarification"):
+                clarif_meta = build_domain_metadata(
+                    status="clarification_needed",
+                    questions=final_state.get("clarification_questions", []),
+                    dataset_id=final_state.get("dataset_id"),
+                    dataset_ids=final_state.get("dataset_ids"),
+                )
+                span_or_trace.update(
+                    output={"response": final_state.get("response", ""), "clarification_needed": True},
+                    metadata={"final_metadata": clarif_meta},
+                )
+                flush_langfuse()
                 return {
                     "response": final_state.get("response", ""),
-                    "metadata": build_domain_metadata(
-                        status="clarification_needed",
-                        questions=final_state.get("clarification_questions", []),
-                        dataset_id=final_state.get("dataset_id"),
-                        dataset_ids=final_state.get("dataset_ids"),
-                    ),
+                    "metadata": clarif_meta,
                 }
 
             exec_res = final_state.get("execution_result") or {}
@@ -875,11 +1085,20 @@ class MLAgent:
                 sql_query=final_state.get("sql_query") or kwargs.get("sql_query") or None,
             )
 
+            span_or_trace.update(
+                output={"response": final_state.get("response", "")},
+                metadata={"final_metadata": metadata},
+            )
+            flush_langfuse()
+
             return {
                 "response": final_state.get("response", ""),
                 "metadata": metadata,
             }
         finally:
+            _current_ml_trace.reset(trace_token)
+            if parent_scope is not None:
+                parent_scope.__exit__(None, None, None)
             self._cleanup_intermediate_files()
 
     def run_sync(

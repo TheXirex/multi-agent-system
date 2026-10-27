@@ -51,6 +51,7 @@ class QueryResponse(BaseModel):
     response: str
     metadata: Dict[str, Any]
     session_id: Optional[str] = None
+    trace_id: Optional[str] = None
 
 
 class IngestFileResponse(BaseModel):

@@ -38,12 +38,14 @@ class ProcessQueryRequest(BaseModel):
     history: List[Dict[str, Any]] = Field(default_factory=list)
     active_metadata: Dict[str, Any] = Field(default_factory=dict)
     session_id: Optional[str] = None
+    trace_id: Optional[str] = None
 
 
 class ProcessQueryResponse(BaseModel):
     response: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
     session_id: Optional[str] = None
+    trace_id: Optional[str] = None
 
 
 @asynccontextmanager
@@ -109,11 +111,13 @@ async def process_query(req: ProcessQueryRequest) -> ProcessQueryResponse:
             history=req.history,
             active_metadata=req.active_metadata,
             session_id=req.session_id,
+            trace_id=req.trace_id,
         )
         return ProcessQueryResponse(
             response=result.final_response,
             metadata=result.metadata,
             session_id=req.session_id,
+            trace_id=result.trace_id or req.trace_id,
         )
     except Exception as exc:
         logger.error(f"Error processing query in AI service: {exc}", exc_info=True)
@@ -135,6 +139,7 @@ async def process_query_stream_endpoint(req: ProcessQueryRequest):
                 history=req.history,
                 active_metadata=req.active_metadata,
                 session_id=req.session_id,
+                trace_id=req.trace_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as exc:

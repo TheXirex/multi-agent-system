@@ -14,6 +14,15 @@ from shared.tools import (
     get_tool_description,
 )
 
+from shared.observability import (
+    create_trace,
+    flush_langfuse,
+    get_langfuse,
+    get_langfuse_callback_handler,
+    is_langfuse_available,
+    trace_span,
+)
+
 __all__ = [
     "BaseLLM",
     "GeminiLLM",
@@ -28,5 +37,11 @@ __all__ = [
     "TOOL_ACTION_CATALOG",
     "get_tool_action_label",
     "get_tool_description",
+    "create_trace",
+    "flush_langfuse",
+    "get_langfuse",
+    "get_langfuse_callback_handler",
+    "is_langfuse_available",
+    "trace_span",
 ]
 

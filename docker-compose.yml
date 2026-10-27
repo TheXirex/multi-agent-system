@@ -36,6 +36,9 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       LLM_MODEL: ${LLM_MODEL:-gemini-3.5-flash-lite}
       LLM_API_KEY: ${LLM_API_KEY}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: ${LANGFUSE_HOST}
     ports:
       - "8001:8001"
     volumes:
@@ -62,6 +65,9 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       AI_SERVICE_URL: http://ai:8001
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+      LANGFUSE_HOST: ${LANGFUSE_HOST}
     ports:
       - "8000:8000"
     volumes:
@@ -74,6 +80,30 @@ services:
         condition: service_healthy
       ai:
         condition: service_started
+
+  langfuse:
+    image: ghcr.io/langfuse/langfuse:2
+    container_name: langfuse
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/langfuse
+      - NEXTAUTH_URL=http://localhost:3000
+      - NEXTAUTH_SECRET=supersecret12345678901234567890123456
+      - SALT=supersecretsalt1234567890123456789
+      - TELEMETRY_ENABLED=false
+      - LANGFUSE_INIT_ORG_ID=org-default
+      - LANGFUSE_INIT_ORG_NAME=Default
+      - LANGFUSE_INIT_PROJECT_ID=project-default
+      - LANGFUSE_INIT_PROJECT_NAME=MultiAgentSystem
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=${LANGFUSE_PUBLIC_KEY}
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=${LANGFUSE_SECRET_KEY}
+      - LANGFUSE_INIT_USER_EMAIL=${LANGFUSE_ADMIN_EMAIL}
+      - LANGFUSE_INIT_USER_NAME=Admin
+      - LANGFUSE_INIT_USER_PASSWORD=${LANGFUSE_ADMIN_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build:

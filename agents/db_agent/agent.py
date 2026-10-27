@@ -18,11 +18,22 @@ from agents.db_agent.tools import (
     RollbackDatabaseChangeTool,
     ToolRegistry,
 )
+import contextvars
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 from shared.metadata import build_domain_metadata, truncate_words
+from shared.observability import (
+    create_trace,
+    flush_langfuse,
+    trace_span,
+)
 
 logger = logging.getLogger(__name__)
+
+# Context variable to hold active Langfuse trace for db_agent
+_current_db_trace: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_current_db_trace", default=None
+)
 
 
 class AgentState(TypedDict):
@@ -62,30 +73,77 @@ class DBAgent:
         self.max_retries = max_retries
         self.graph = self._build_graph()
 
-    def run(self, user_request: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def run(
+        self,
+        user_request: str,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Executes the LangGraph agent workflow for the given user request.
 
         Args:
             user_request (str): Natural language user requirement.
             session_id (Optional[str]): Optional active session ID for session schema replica.
+            trace_id (Optional[str]): Distributed trace ID to bind execution.
+            parent_observation_id (Optional[str]): Parent observation ID within the trace.
 
         Returns:
             Dict[str, Any]: Final graph state containing execution details and response.
         """
-        initial_state: AgentState = {
-            "user_input": user_request,
-            "schema": "",
-            "sql_query": "",
-            "table_name": "",
-            "sql_description": "",
-            "tool_result": {},
-            "response": "",
-            "error": None,
-            "retry_count": 0,
-            "session_id": session_id,
-        }
-        return self.graph.invoke(initial_state)
+        if trace_id:
+            parent_scope = trace_span(
+                name="db_agent.query_and_analyze",
+                trace_id=trace_id,
+                parent_observation_id=parent_observation_id,
+                input_data={"user_request": user_request, "session_id": session_id},
+                metadata={"session_id": session_id},
+            )
+            span_or_trace = parent_scope.__enter__()
+        else:
+            parent_scope = None
+            span_or_trace = create_trace(
+                name="db_agent.query_and_analyze",
+                session_id=session_id,
+                input_data={"user_request": user_request, "session_id": session_id},
+                metadata={"session_id": session_id},
+                tags=["db_agent"],
+            )
+
+        token = _current_db_trace.set(span_or_trace)
+        try:
+            initial_state: AgentState = {
+                "user_input": user_request,
+                "schema": "",
+                "sql_query": "",
+                "table_name": "",
+                "sql_description": "",
+                "tool_result": {},
+                "response": "",
+                "error": None,
+                "retry_count": 0,
+                "session_id": session_id,
+            }
+            final_state = self.graph.invoke(initial_state)
+            span_or_trace.update(
+                output={
+                    "sql_query": final_state.get("sql_query", ""),
+                    "table_name": final_state.get("table_name", ""),
+                    "response": final_state.get("response", ""),
+                },
+                metadata={
+                    "sql_query": final_state.get("sql_query", ""),
+                    "table_name": final_state.get("table_name", ""),
+                    "session_id": session_id,
+                },
+            )
+            flush_langfuse()
+            return final_state
+        finally:
+            _current_db_trace.reset(token)
+            if parent_scope is not None:
+                parent_scope.__exit__(None, None, None)
 
     def _save_sql_script(
         self,
@@ -119,18 +177,31 @@ class DBAgent:
             logger.error(f"Error saving SQL script to database: {ex}", exc_info=True)
             return None
 
-    def query_database_and_analyze(self, user_input: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def query_database_and_analyze(
+        self,
+        user_input: str,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Analyzes database content based on user request, executes query, and returns a structured response with metadata.
 
         Args:
             user_input (str): Natural language instruction or analytical question.
             session_id (Optional[str]): Optional active session ID.
+            trace_id (Optional[str]): Distributed trace ID to bind execution.
+            parent_observation_id (Optional[str]): Parent observation ID within the trace.
 
         Returns:
             Dict[str, Any]: Structured dictionary with response and ID-only metadata.
         """
-        final_state = self.run(user_input, session_id=session_id)
+        final_state = self.run(
+            user_input,
+            session_id=session_id,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+        )
         tool_result = final_state.get("tool_result") or {}
         dataset_id = tool_result.get("dataset_id")
         sql_query = final_state.get("sql_query", "")
@@ -183,54 +254,75 @@ class DBAgent:
         file_bytes: Optional[bytes] = None,
         filename: Optional[str] = None,
         session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Ingests and validates tabular files (CSV, Excel) into the database.
-
-        Args:
-            file_path (Optional[str]): Path to the file on disk.
-            dataset_name (Optional[str]): Optional custom dataset name.
-            file_bytes (Optional[bytes]): Raw file bytes.
-            filename (Optional[str]): Explicit filename override.
-            session_id (Optional[str]): Optional session ID to bind this dataset exclusively to a chat session.
-
-        Returns:
-            Dict[str, Any]: Ingestion status, metadata, and dataset details or diagnostic error.
         """
-        return self.tools.execute(
-            "ingest_tabular_file",
-            file_path=file_path,
-            dataset_name=dataset_name,
-            file_bytes=file_bytes,
-            filename=filename,
-            session_id=session_id,
-        )
+        with trace_span(
+            "db_agent.ingest_tabular_file",
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+            input_data={"file_path": file_path, "dataset_name": dataset_name, "filename": filename},
+            metadata={"session_id": session_id},
+        ) as span:
+            res = self.tools.execute(
+                "ingest_tabular_file",
+                file_path=file_path,
+                dataset_name=dataset_name,
+                file_bytes=file_bytes,
+                filename=filename,
+                session_id=session_id,
+            )
+            span.update(output={"status": res.get("status"), "dataset_id": res.get("dataset_id")})
+            return res
 
-    def modify_table(self, instruction: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def modify_table(
+        self,
+        instruction: str,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Modifies table data or structure in the session replica database.
-
-        Args:
-            instruction (str): Natural language instruction describing the mutation.
-            session_id (Optional[str]): Optional active session ID.
-
-        Returns:
-            Dict[str, Any]: Status, message, and change record details.
         """
-        return self.tools.execute("modify_database_table", instruction=instruction, session_id=session_id)
+        with trace_span(
+            "db_agent.modify_database_table",
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+            input_data={"instruction": instruction, "session_id": session_id},
+            metadata={"session_id": session_id},
+        ) as span:
+            token = _current_db_trace.set(span)
+            try:
+                res = self.tools.execute("modify_database_table", instruction=instruction, session_id=session_id)
+                span.update(output={"status": res.get("status")})
+                return res
+            finally:
+                _current_db_trace.reset(token)
 
-    def rollback_change(self, session_id: Optional[str] = None, target_change_id: Optional[int] = None) -> Dict[str, Any]:
+    def rollback_change(
+        self,
+        session_id: Optional[str] = None,
+        target_change_id: Optional[int] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Rolls back database changes in the session replica.
-
-        Args:
-            session_id (Optional[str]): Active session ID.
-            target_change_id (Optional[int]): Optional specific change ID to rollback.
-
-        Returns:
-            Dict[str, Any]: Status and description of the rolled back change.
         """
-        return self.tools.execute("rollback_database_change", session_id=session_id, target_change_id=target_change_id)
+        with trace_span(
+            "db_agent.rollback_database_change",
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
+            input_data={"session_id": session_id, "target_change_id": target_change_id},
+            metadata={"session_id": session_id},
+        ) as span:
+            res = self.tools.execute("rollback_database_change", session_id=session_id, target_change_id=target_change_id)
+            span.update(output={"status": res.get("status")})
+            return res
 
     def _build_graph(self) -> Any:
         """
@@ -274,8 +366,18 @@ class DBAgent:
         Returns:
             Dict[str, Any]: State updates with retrieved schema context.
         """
-        schema_summary = self.inspector.get_schema_summary(session_id=state.get("session_id"))
-        return {"schema": schema_summary}
+        trace = _current_db_trace.get()
+        with trace_span(
+            "db_agent.inspect_schema",
+            parent=trace,
+            input_data={"session_id": state.get("session_id")},
+            metadata={"session_id": state.get("session_id")},
+        ) as span:
+            schema_summary = self.inspector.get_schema_summary(session_id=state.get("session_id"))
+            span.update(
+                output={"schema_length": len(schema_summary)},
+            )
+            return {"schema": schema_summary}
 
     def _generate_sql_node(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -312,45 +414,72 @@ class DBAgent:
         table_name = ""
         sql_description = ""
 
-        try:
-            structured_model = self.chat_model.with_structured_output(SQLGenerationOutput)
-            result = structured_model.invoke(messages)
-            if isinstance(result, dict):
-                result = SQLGenerationOutput.model_validate(result)
+        trace = _current_db_trace.get()
+        with trace_span(
+            "db_agent.generate_sql",
+            parent=trace,
+            input_data={
+                "user_input": state.get("user_input"),
+                "has_error_retry": bool(state.get("error")),
+            },
+            metadata={
+                "retry_count": state.get("retry_count", 0),
+            },
+        ) as sql_span:
+            handler = sql_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
 
-            if isinstance(result, SQLGenerationOutput):
-                sql = result.sql.strip()
-                table_name = truncate_words(result.table_name.strip(), max_words=5)
-                sql_description = truncate_words(result.sql_description.strip(), max_words=5)
-        except Exception as ex:
-            logger.warning(f"Structured SQL generation failed ({ex}), falling back to direct invoke")
             try:
-                ai_response = self.chat_model.invoke(messages)
-                raw_text = extract_text_from_message_content(ai_response.content)
-                sql = self._clean_sql_query(raw_text)
-            except Exception as fb_err:
-                logger.error(f"Fallback invoke failed: {fb_err}")
+                structured_model = self.chat_model.with_structured_output(SQLGenerationOutput)
+                result = structured_model.invoke(messages, config=config)
+                if isinstance(result, dict):
+                    result = SQLGenerationOutput.model_validate(result)
 
-        if not sql:
-            sql = self._clean_sql_query(state.get("sql_query", ""))
+                if isinstance(result, SQLGenerationOutput):
+                    sql = result.sql.strip()
+                    table_name = truncate_words(result.table_name.strip(), max_words=5)
+                    sql_description = truncate_words(result.sql_description.strip(), max_words=5)
+            except Exception as ex:
+                logger.warning(f"Structured SQL generation failed ({ex}), falling back to direct invoke")
+                try:
+                    ai_response = self.chat_model.invoke(messages, config=config)
+                    raw_text = extract_text_from_message_content(ai_response.content)
+                    sql = self._clean_sql_query(raw_text)
+                except Exception as fb_err:
+                    logger.error(f"Fallback invoke failed: {fb_err}")
 
-        if not table_name:
-            user_input = state.get("user_input", "")
-            req_words = "".join(c for c in user_input if c.isalnum() or c.isspace()).split()
-            table_name = truncate_words(" ".join(req_words[:5]).title() if req_words else "Query Results", max_words=5)
-        else:
-            table_name = truncate_words(table_name, max_words=5)
+            if not sql:
+                sql = self._clean_sql_query(state.get("sql_query", ""))
 
-        if not sql_description:
-            sql_description = truncate_words(f"Query {table_name}", max_words=5)
-        else:
-            sql_description = truncate_words(sql_description, max_words=5)
+            if not table_name:
+                user_input = state.get("user_input", "")
+                req_words = "".join(c for c in user_input if c.isalnum() or c.isspace()).split()
+                table_name = truncate_words(" ".join(req_words[:5]).title() if req_words else "Query Results", max_words=5)
+            else:
+                table_name = truncate_words(table_name, max_words=5)
 
-        return {
-            "sql_query": sql,
-            "table_name": table_name,
-            "sql_description": sql_description,
-        }
+            if not sql_description:
+                sql_description = truncate_words(f"Query {table_name}", max_words=5)
+            else:
+                sql_description = truncate_words(sql_description, max_words=5)
+
+            sql_span.update(
+                output={
+                    "sql_query": sql,
+                    "table_name": table_name,
+                    "sql_description": sql_description,
+                },
+                metadata={
+                    "sql_query": sql,
+                    "table_name": table_name,
+                },
+            )
+
+            return {
+                "sql_query": sql,
+                "table_name": table_name,
+                "sql_description": sql_description,
+            }
 
     def _execute_sql_node(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -364,21 +493,54 @@ class DBAgent:
         """
         sql_query = state.get("sql_query", "")
         table_name = state.get("table_name", "Query Results")
-        tool_result = self.tools.execute(
-            "execute_sql_to_csv",
-            query=sql_query,
-            filename=table_name,
-            session_id=state.get("session_id"),
-        )
 
-        error = tool_result.get("error") if tool_result.get("status") == "error" else None
-        current_retries = state.get("retry_count", 0)
+        trace = _current_db_trace.get()
+        with trace_span(
+            "db_agent.execute_sql",
+            parent=trace,
+            input_data={
+                "sql_query": sql_query,
+                "table_name": table_name,
+                "session_id": state.get("session_id"),
+            },
+            metadata={
+                "table_name": table_name,
+            },
+        ) as exec_span:
+            tool_result = self.tools.execute(
+                "execute_sql_to_csv",
+                query=sql_query,
+                filename=table_name,
+                session_id=state.get("session_id"),
+            )
 
-        return {
-            "tool_result": tool_result,
-            "error": error,
-            "retry_count": current_retries + 1 if error else current_retries,
-        }
+            error = tool_result.get("error") if tool_result.get("status") == "error" else None
+            current_retries = state.get("retry_count", 0)
+
+            if error:
+                exec_span.update(
+                    level="ERROR",
+                    status_message=str(error),
+                    output={"error": error, "status": "error"},
+                )
+            else:
+                exec_span.update(
+                    output={
+                        "row_count": tool_result.get("row_count"),
+                        "dataset_id": tool_result.get("dataset_id"),
+                        "status": "success",
+                    },
+                    metadata={
+                        "dataset_id": tool_result.get("dataset_id"),
+                        "row_count": tool_result.get("row_count"),
+                    },
+                )
+
+            return {
+                "tool_result": tool_result,
+                "error": error,
+                "retry_count": current_retries + 1 if error else current_retries,
+            }
 
     def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """
@@ -410,9 +572,28 @@ class DBAgent:
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_content),
         ]
-        ai_response = self.chat_model.invoke(messages)
-        response_text = extract_text_from_message_content(ai_response.content)
-        return {"response": response_text}
+
+        trace = _current_db_trace.get()
+        with trace_span(
+            "db_agent.generate_response",
+            parent=trace,
+            input_data={
+                "row_count": row_count,
+                "columns": columns,
+                "user_input": state.get("user_input"),
+            },
+            metadata={
+                "row_count": row_count,
+            },
+        ) as resp_span:
+            handler = resp_span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
+            ai_response = self.chat_model.invoke(messages, config=config)
+            response_text = extract_text_from_message_content(ai_response.content)
+            resp_span.update(
+                output={"response": response_text},
+            )
+            return {"response": response_text}
 
     def _route_after_execution(self, state: AgentState) -> Literal["retry", "respond"]:
         """

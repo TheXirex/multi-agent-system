@@ -1,5 +1,5 @@
 import React from 'react';
-import { PanelLeft } from 'lucide-react';
+import { Activity, PanelLeft } from 'lucide-react';
 
 interface HeaderProps {
   isBusy: boolean;
@@ -35,8 +35,33 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Right section: Activity status indicator */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      {/* Right section: Observability Link & Activity status indicator */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <a
+          href="http://localhost:3000"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open Langfuse Observability Dashboard"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '4px 10px',
+            fontSize: '12px',
+            fontWeight: 600,
+            color: '#ced4da',
+            backgroundColor: '#343a40',
+            border: '1px solid #495057',
+            borderRadius: '4px',
+            textDecoration: 'none',
+            cursor: 'pointer',
+            transition: 'background-color 0.2s',
+          }}
+        >
+          <Activity size={14} color="#51cf66" />
+          <span>Observability</span>
+        </a>
+
         {isBusy && (
           <div
             style={{

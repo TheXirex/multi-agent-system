@@ -88,6 +88,7 @@ class FinalOrchestratorResult(BaseModel):
     raw_answer: RawExecutionAnswer = Field(default_factory=RawExecutionAnswer, description="Raw tool execution details and outputs")
     final_response: str = Field(description="Final user-facing response synthesized by Orchestrator")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Domain metadata (table, SQL queries)")
+    trace_id: Optional[str] = Field(default=None, description="Langfuse trace identifier")
 
     @property
     def response(self) -> str:
@@ -103,4 +104,5 @@ class FinalOrchestratorResult(BaseModel):
             "metadata": self.metadata,
             "plan": self.plan.model_dump(),
             "raw_answer": self.raw_answer.model_dump(),
+            "trace_id": self.trace_id,
         }

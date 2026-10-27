@@ -30,6 +30,7 @@ dependencies = [
     "openpyxl>=3.1.0",
     "python-multipart>=0.0.9",
     "kagglehub>=0.3.0",
+    "langfuse>=2.0.0,<3.0.0",
 ]
 
 

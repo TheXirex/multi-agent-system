@@ -10,6 +10,7 @@ from sqlalchemy import Engine, text
 from agents.db_agent.db.inspector import DatabaseInspector
 from agents.db_agent.tools.base import BaseTool
 from shared.db import apply_session_search_path, ensure_session_replica, get_session_schema_or_public
+from shared.observability import trace_span
 
 logger = logging.getLogger(__name__)
 
@@ -339,21 +340,45 @@ class ModifyDatabaseTableTool(BaseTool):
             HumanMessage(content=user_content),
         ]
 
-        try:
-            structured_model = self.chat_model.with_structured_output(ModificationPlan)
-            result = structured_model.invoke(messages)
-            if isinstance(result, dict):
-                result = ModificationPlan.model_validate(result)
-            return result
-        except Exception as exc:
-            logger.warning(f"Structured modification planning failed: {exc}, attempting raw fallback")
-            return ModificationPlan(
-                is_ambiguous=False,
-                action_type="unknown",
-                target_table=table_name or "",
-                sql_statement=instruction,
-                description=instruction,
-            )
+        with trace_span(
+            "db_agent.plan_table_modification",
+            input_data={"instruction": instruction, "hint_table": table_name, "hint_action": action_type},
+            metadata={"session_id": session_id, "target_schema": target_schema},
+        ) as span:
+            handler = span.get_langchain_handler()
+            config = {"callbacks": [handler]} if handler else {}
+            try:
+                structured_model = self.chat_model.with_structured_output(ModificationPlan)
+                result = structured_model.invoke(messages, config=config)
+                if isinstance(result, dict):
+                    result = ModificationPlan.model_validate(result)
+                span.update(
+                    output={
+                        "is_ambiguous": result.is_ambiguous,
+                        "action_type": result.action_type,
+                        "target_table": result.target_table,
+                        "sql_statement": result.sql_statement,
+                    },
+                    metadata={
+                        "action_type": result.action_type,
+                        "target_table": result.target_table,
+                    },
+                )
+                return result
+            except Exception as exc:
+                logger.warning(f"Structured modification planning failed: {exc}, attempting raw fallback")
+                fallback_plan = ModificationPlan(
+                    is_ambiguous=False,
+                    action_type="unknown",
+                    target_table=table_name or "",
+                    sql_statement=instruction,
+                    description=instruction,
+                )
+                span.update(
+                    output={"fallback": True, "sql_statement": instruction},
+                    level="WARNING",
+                )
+                return fallback_plan
 
     def _capture_before_state(
         self,

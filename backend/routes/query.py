@@ -271,9 +271,12 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
         )
 
     ai_response_text = ai_data.get("response", "")
+    ai_trace_id = ai_data.get("trace_id")
     resp_metadata = dict(ai_data.get("metadata", {}))
 
     resp_metadata["session_id"] = session_id
+    if ai_trace_id and not resp_metadata.get("trace_id"):
+        resp_metadata["trace_id"] = ai_trace_id
     if attached_table_names and not resp_metadata.get("table_names"):
         resp_metadata["table_names"] = attached_table_names
 
@@ -289,6 +292,7 @@ async def query_endpoint(request: QueryRequest) -> QueryResponse:
         response=ai_response_text,
         metadata=resp_metadata,
         session_id=session_id,
+        trace_id=ai_trace_id,
     )
 
 
@@ -355,8 +359,11 @@ async def query_stream_endpoint(request: QueryRequest):
 
                                         elif ev_type == "result":
                                             ai_response_text = event_data.get("response", "")
+                                            ai_trace_id = event_data.get("trace_id")
                                             resp_metadata = dict(event_data.get("metadata", {}))
                                             resp_metadata["session_id"] = session_id
+                                            if ai_trace_id and not resp_metadata.get("trace_id"):
+                                                resp_metadata["trace_id"] = ai_trace_id
                                             if attached_table_names and not resp_metadata.get("table_names"):
                                                 resp_metadata["table_names"] = attached_table_names
 
@@ -373,6 +380,7 @@ async def query_stream_endpoint(request: QueryRequest):
                                                 "response": ai_response_text,
                                                 "metadata": resp_metadata,
                                                 "session_id": session_id,
+                                                "trace_id": ai_trace_id,
                                             }
                                             yield f"data: {json.dumps(final_payload)}\n\n"
 

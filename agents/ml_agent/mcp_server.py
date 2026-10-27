@@ -40,6 +40,8 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
         table_names: Optional[List[str]] = None,
         session_id: Optional[str] = None,
         sql_query: Optional[str] = None,
+        trace_id: Optional[str] = None,
+        parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Executes ML task on the given dataset(s) or database table(s).
@@ -52,6 +54,8 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
             table_names (Optional[List[str]]): Relational database table name or list of table names to analyze.
             session_id (Optional[str]): Optional session ID to bind and scope the analysis.
             sql_query (Optional[str]): Optional SQL query string associated with data preparation.
+            trace_id (Optional[str]): Optional distributed trace ID for unified tracing.
+            parent_observation_id (Optional[str]): Optional parent span ID within the trace.
 
         Returns:
             Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
@@ -64,6 +68,8 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
             table_names=table_names,
             session_id=session_id,
             sql_query=sql_query,
+            trace_id=trace_id,
+            parent_observation_id=parent_observation_id,
         )
 
 

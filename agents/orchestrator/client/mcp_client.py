@@ -196,7 +196,14 @@ class ActiveMCPSession:
 
         session = self.sessions[server_name]
         try:
-            call_res = await session.call_tool(tool_name, arguments=arguments)
+            tool_defn = self.tool_map.get(tool_name)
+            if tool_defn and tool_defn.input_schema and "properties" in tool_defn.input_schema:
+                allowed_keys = set(tool_defn.input_schema["properties"].keys())
+                filtered_args = {k: v for k, v in arguments.items() if k in allowed_keys}
+            else:
+                filtered_args = arguments
+
+            call_res = await session.call_tool(tool_name, arguments=filtered_args)
             raw_text_parts: List[str] = []
             parsed_data: Optional[Dict[str, Any]] = None
             metadata: Dict[str, Any] = {}
