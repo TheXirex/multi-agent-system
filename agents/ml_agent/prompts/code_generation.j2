@@ -33,10 +33,10 @@ Methodology and Algorithms:
     - Evaluate using R², RMSE, MAE, and MAPE.
     - Generate an Actual vs. Predicted scatter plot or Residuals distribution plot in Plotly.
   * Clustering & Customer Segmentation Tasks:
-    - Select relevant numerical features and scale them with StandardScaler.
-    - Use KMeans (evaluating optimal k using Silhouette score) or DBSCAN.
-    - Reduce dimensionality to 2 components using PCA (from sklearn.decomposition import PCA) for Plotly visualization, setting a descriptive legend title (such as 'Cluster') or omitting it with fig.update_layout(legend_title_text='').
-    - Calculate and print Silhouette Score, Davies-Bouldin Score, cluster counts, and per-cluster mean statistics.
+    - Select relevant numerical features and scale them appropriately (e.g. with StandardScaler).
+    - Choose an effective clustering technique (e.g. KMeans, DBSCAN, or hierarchical clustering) and evaluate cluster quality (e.g. Silhouette Score, cluster sizes, per-cluster statistics).
+    - Choose an informative visualization that best communicates cluster differences (such as a scatter plot comparing prominent domain features, a scatter matrix, or parallel coordinates).
+    - Set a clear legend title (such as 'Cluster') or clean layout with fig.update_layout(legend_title_text='Cluster').
   * Time Series & Trend Analysis:
     - Parse dates, sort chronologically, and extract features (day of week, month, lag values, rolling means).
     - Plot trends and moving averages with interactive Plotly line charts.
@@ -44,20 +44,14 @@ Methodology and Algorithms:
     - Use IsolationForest or IQR/Z-score thresholds.
     - Flag anomalies, calculate anomaly rate, and highlight outliers in a Plotly scatter plot.
 
-Visualizations:
-- Use Plotly for interactive charts (import plotly.express as px or import plotly.graph_objects as go).
-- Keep each visualization as an independent, separate figure instead of combining them into subplots, dashboards, or grid layouts. Avoid using make_subplots.
-- Save each figure to its own separate JSON file (for example: fig_age.write_json('customer_age_distribution.json'), fig_spending.write_json('spending_score_distribution.json')).
-- Chart titles: Give each figure a concise title (4–5 words maximum, such as 'Customer Age Distribution' or 'Spending Score Residuals').
-- Legend titles: A chart may or may not include a legend. When a legend is present, provide a meaningful title (such as 'Cluster', 'Category', 'Target', or the relevant feature name) or omit the legend title completely using fig.update_layout(legend_title_text=''). Avoid using the raw default word 'color' or 'colour' as a legend title.
-- Configure clear axis labels and modern styling (template="plotly_dark").
-- Use distinct, high-contrast colors for categories, regression lines, and residuals.
-- Save figures only as JSON specifications.
+{% if chart_guidelines %}
+{{ chart_guidelines }}
+{% endif %}
 
 Console Output:
 - Print substantive quantitative results, metrics (R², RMSE, Accuracy, F1, Silhouette score), and key model findings.
 - Avoid printing generic status messages (such as 'Task completed' or 'Starting...').
 
 Code Formatting:
-- Do not write any comments in the code. Write clean, self-explanatory code without comments.
+- Write clean, self-explanatory code without comments.
 - Wrap the script in a ```python ``` block without surrounding conversational commentary.

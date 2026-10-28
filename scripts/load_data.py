@@ -9,6 +9,7 @@ import argparse
 import io
 import logging
 import os
+from datetime import datetime, timedelta
 from pathlib import Path
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
@@ -257,6 +258,23 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
                 "review_content": content,
             })
 
+            order_idx = len(orders_data)
+            base_date = datetime(2024, 11, 1)
+            offset_days = (order_idx * 724) // 10000
+            order_dt = base_date + timedelta(days=offset_days, hours=(order_idx % 24), minutes=(order_idx % 60))
+
+            status_mod = order_idx % 100
+            if status_mod < 75:
+                order_status = "Delivered"
+            elif status_mod < 87:
+                order_status = "Shipped"
+            elif status_mod < 94:
+                order_status = "Processing"
+            elif status_mod < 98:
+                order_status = "Cancelled"
+            else:
+                order_status = "Returned"
+
             orders_data.append({
                 "order_id": f"ORD-{safe_rid}"[:100],
                 "user_id": assigned_uid,
@@ -264,7 +282,8 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
                 "unit_price": p_price,
                 "quantity": 1,
                 "total_amount": p_price,
-                "status": "Delivered",
+                "status": order_status,
+                "order_date": order_dt,
             })
 
     users_data = [{"id": uid, "name": uname} for uid, uname in users_dict.items()]
@@ -440,8 +459,8 @@ def seed_database(engine: Engine, reset: bool = False) -> None:
             chunk = orders_data[i : i + chunk_size]
             conn.execute(
                 text("""
-                    INSERT INTO orders (order_id, user_id, product_id, unit_price, quantity, total_amount, status)
-                    VALUES (:order_id, :user_id, :product_id, :unit_price, :quantity, :total_amount, :status)
+                    INSERT INTO orders (order_id, user_id, product_id, unit_price, quantity, total_amount, status, order_date)
+                    VALUES (:order_id, :user_id, :product_id, :unit_price, :quantity, :total_amount, :status, :order_date)
                     ON CONFLICT (order_id) DO NOTHING;
                 """),
                 chunk,

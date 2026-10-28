@@ -1,0 +1,73 @@
+Visualizations and Chart Selection:
+- Use Plotly for interactive figures (import plotly.express as px or import plotly.graph_objects as go).
+- Keep each visualization as an independent, standalone figure. Avoid subplots, grids, or make_subplots.
+- Save each figure to its own separate JSON file (for example: fig.write_json('top_products_by_revenue.json')).
+- Chart titles: Provide a concise title (4–5 words maximum, e.g., 'Top Products by Revenue' or 'Customer Age Distribution').
+
+Chart Type Selection Guidelines:
+1. Categorical Comparisons and Rankings (Top-N items, categories, counts, aggregates):
+   - When category labels are long (>10 characters) or when comparing more than 5 items:
+     Use Horizontal Bar Chart (px.bar(..., orientation='h')).
+     Sort values ascending so the highest-ranking item appears at the top: df = df.sort_values(by=metric, ascending=True).
+     Filter to the top 10–15 items (e.g. df.tail(10)) to keep bars legible and well-spaced.
+   - When comparing few categories (up to 5) with short names:
+     Use Vertical Bar Chart (px.bar(...)), sorted descending.
+   - For all bar charts, define clear borders and spacing between bars:
+     fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.2)
+     fig.update_layout(bargap=0.15)
+2. Trends Over Time and Continuous Progressions:
+   - Use Line Chart (px.line(..., markers=True)).
+   - Reserve bar and pie charts for discrete categorical comparisons rather than continuous temporal trends.
+3. Distribution of a Single Metric:
+   - Use a clean Histogram without marginal box plots or outlier fence points (px.histogram(df, x=metric, nbins=25)). Omit marginal box plots so that lower and upper fence markers and outlier points do not clutter the distribution.
+   - Histogram Bins and Borders:
+     Separate adjacent bins with distinct borders and a layout gap so they remain individually visible and avoid blending into a continuous solid blob:
+     fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.5, selector=dict(type='histogram'))
+     fig.update_layout(bargap=0.08)
+   - For comparing distributions across 2–5 groups, use Box Plot (px.box(..., points=False)) omitting individual outlier fence points.
+4. Correlation and Relationship Between Two Continuous Variables:
+   - Use Scatter Plot with a prominent OLS trendline:
+     fig = px.scatter(df, x=var_x, y=var_y, opacity=0.7, trendline='ols', trendline_color_override='#EF553B')
+     fig.update_traces(line=dict(width=3), selector=dict(mode='lines'))
+   - Regression Line Styling:
+     Display the regression line with a thick stroke (width=3) and an eye-catching, distinct color (such as '#EF553B' or '#FF6692') that sharply contrasts with the scatter points.
+5. Multi-Feature Correlation Matrix:
+   - Use Heatmap (px.imshow(df.corr(numeric_only=True), text_auto='.2f', color_continuous_scale='RdBu_r', zmin=-1, zmax=1)).
+6. Composition and Proportions of a Whole:
+   - Use Donut Chart (px.pie(..., hole=0.45)) only when total categories do not exceed 5 and values are strictly positive.
+   - When categories exceed 5, group minor categories into 'Other' or use a Horizontal Bar Chart. Avoid pie charts for more than 6 categories or negative values.
+7. Clustering and Segmentation:
+   - Choose a visualization that makes the clusters intuitive to interpret, such as a Scatter Plot comparing key domain features colored by cluster (px.scatter(df, x=primary_feature, y=secondary_feature, color=df['cluster'].astype(str))), a Scatter Matrix, or other multi-variable views.
+
+Typography, Sizing, and Layout Styling:
+- Global Font Size: Constrain font sizing in layout to maintain balanced proportions:
+  fig.update_layout(font=dict(size=12), title=dict(font=dict(size=15)))
+- Axis Ticks and Labels:
+  fig.update_xaxes(title_font_size=12, tickfont_size=10)
+  fig.update_yaxes(title_font_size=12, tickfont_size=10)
+- Bar and Histogram Outlines:
+  Configure clear borders and gutters on bar and histogram traces so bars do not fuse together:
+  fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.5, selector=dict(type='histogram'))
+  fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.2, selector=dict(type='bar'))
+- On-Chart Data Labels:
+  Keep text size compact (e.g. fig.update_traces(textfont_size=10, textposition='outside')).
+  Format numbers cleanly (e.g., text_auto='.1f' or text_auto='$.2s'). If data points are dense, omit on-chart text and rely on interactive hover tooltips.
+- Concise Hover Tooltips:
+  Format hover tooltips to be concise and minimal. Remove redundant secondary legend/trace boxes and column name prefixes:
+  * Box Plots and Quartiles: Display clean quartile notations without legend clutter by using native hoverinfo:
+    fig.update_traces(hovertemplate=None, hoverinfo='y', selector=dict(type='box'))
+    (or hoverinfo='x+y' when comparing categories across the x-axis). This natively outputs max, q3, median, q1, min without legend boxes or repetitive column labels.
+  * Bar Charts and Categorical Aggregations: Keep hover clean (label: value) using `<extra></extra>` to omit secondary legend boxes:
+    For horizontal bar: fig.update_traces(hovertemplate='%{y}: %{x}<extra></extra>', selector=dict(type='bar'))
+    For vertical bar: fig.update_traces(hovertemplate='%{x}: %{y}<extra></extra>', selector=dict(type='bar'))
+  * Histograms: Use concise count hover:
+    fig.update_traces(hovertemplate='%{x}: %{y}<extra></extra>', selector=dict(type='histogram'))
+- Long Label Truncation:
+  When categorical labels exceed 25 characters, truncate them in pandas:
+  df['display_name'] = df['name'].apply(lambda x: str(x)[:25] + '...' if len(str(x)) > 25 else str(x))
+- Margins: Ensure adequate margin for labels:
+  fig.update_layout(margin=dict(l=100, r=30, t=50, b=50))
+- Legend and Colorbars:
+  Give meaningful legend titles (such as 'Category', 'Cluster', 'Tier') or omit via fig.update_layout(legend_title_text=''). Avoid raw default variable names like 'color'.
+- Visual Theme:
+  Use template="plotly_dark", clean transparent backgrounds (paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), and distinct color palettes (color_discrete_sequence=px.colors.qualitative.Plotly or px.colors.qualitative.Safe).

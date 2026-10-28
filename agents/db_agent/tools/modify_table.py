@@ -218,13 +218,13 @@ class ModifyDatabaseTableTool(BaseTool):
                         # Build rollback SQL to delete inserted IDs
                         if after_state and "id" in after_state[0]:
                             inserted_ids = [str(r["id"]) for r in after_state if "id" in r]
-                            rollback_sql = f'DELETE FROM "{target_schema}"."{resolved_table}" WHERE id IN ({", ".join(inserted_ids)});'
+                            rollback_sql = f'DELETE FROM "{resolved_table}" WHERE id IN ({", ".join(inserted_ids)});'
                     except Exception:
                         pass
 
                 # If CREATE TABLE, rollback is DROP TABLE
                 if plan.action_type == "create_table" and resolved_table and not rollback_sql:
-                    rollback_sql = f'DROP TABLE IF EXISTS "{target_schema}"."{resolved_table}" CASCADE;'
+                    rollback_sql = f'DROP TABLE IF EXISTS "{resolved_table}" CASCADE;'
 
                 # If ALTER TABLE ADD COLUMN, rollback is DROP COLUMN
                 if plan.action_type == "alter_table" and not rollback_sql:
@@ -237,7 +237,7 @@ class ModifyDatabaseTableTool(BaseTool):
                         parts = after.split()
                         if parts:
                             new_col = parts[0].strip('"` \t\n\r,;')
-                            rollback_sql = f'ALTER TABLE "{target_schema}"."{resolved_table}" DROP COLUMN IF EXISTS "{new_col}";'
+                            rollback_sql = f'ALTER TABLE "{resolved_table}" DROP COLUMN IF EXISTS "{new_col}";'
 
                 # 9. Record change in internal.change_history
                 if session_id:
@@ -316,13 +316,13 @@ class ModifyDatabaseTableTool(BaseTool):
             "You are an expert PostgreSQL database administrator. "
             "Your task is to analyze user requests to modify database tables (INSERT, UPDATE, DELETE rows, "
             "ALTER TABLE, CREATE TABLE, DROP TABLE) and output an accurate, safe ModificationPlan.\n\n"
-            "CRITICAL GUIDELINES:\n"
+            "Core Guidelines:\n"
             "1. Ambiguity Detection:\n"
-            "   - Set is_ambiguous = True ONLY when critical conditions are genuinely missing (e.g. user asks to 'update price' without specifying which product or what price, or 'delete' without clear targeting criteria).\n"
-            "   - DO NOT ask trivial or unnecessary questions (e.g. if the user says 'delete John' and there is only one users table, infer that the table is 'users').\n"
-            "   - If is_ambiguous is True, provide a concise, polite explanation in 'clarification_message' and list the questions in 'clarification_questions'. Do NOT execute a guessing query.\n"
+            "   - Set is_ambiguous = True only when essential targeting conditions are missing (e.g. user asks to 'update price' without specifying which product or what price, or 'delete' without clear targeting criteria).\n"
+            "   - Avoid asking unnecessary questions when context allows reasonable inference (e.g. if the user says 'delete John' and there is only one users table, infer that the table is 'users').\n"
+            "   - When is_ambiguous is True, provide a concise, polite explanation in 'clarification_message' and list the questions in 'clarification_questions', rather than executing an unverified guess.\n"
             "2. Table and Schema Rules:\n"
-            "   - Never modify or target 'internal.*' tables (chat_sessions, chat_messages, change_history).\n"
+            "   - Avoid modifying or targeting 'internal.*' tables (chat_sessions, chat_messages, change_history).\n"
             "   - The user has full freedom to create any new tables they want (e.g. employees, logs, inventory).\n"
             "   - Generate clean PostgreSQL syntax without schema prefix, as search_path is configured.\n"
             "   - For INSERT statements, append 'RETURNING *' to capture generated values.\n"

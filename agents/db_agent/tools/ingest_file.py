@@ -301,8 +301,8 @@ class IngestTabularFileTool(BaseTool):
                                 "session_id": session_id,
                                 "table_name": target_table,
                                 "description": f"Ingested {resolved_filename} as table '{target_table}'",
-                                "executed_sql": f"-- Created table {target_schema}.{target_table} from {resolved_filename}",
-                                "rollback_sql": f'DROP TABLE IF EXISTS "{target_schema}"."{target_table}" CASCADE;',
+                                "executed_sql": f"-- Created table {target_table} from {resolved_filename}",
+                                "rollback_sql": f'DROP TABLE IF EXISTS "{target_table}" CASCADE;',
                             },
                         )
 

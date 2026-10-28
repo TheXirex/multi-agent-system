@@ -42,9 +42,9 @@ class DatabaseInspector:
         tables = self.get_table_names(session_id=session_id, schema=target_schema)
 
         if not tables:
-            return f"No tables found in the '{target_schema}' database schema."
+            return "No tables found in the active database schema."
 
-        lines: List[str] = [f"Database Schema ({target_schema}):"]
+        lines: List[str] = ["Database Schema:"]
 
         for table in tables:
             lines.append(f"\nTable: {table}")

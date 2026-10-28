@@ -257,11 +257,11 @@ class MLAgent:
                     apply_session_search_path(conn, session_id)
                     for t_name in resolved_tables:
                         clean_var = f"data_{self._clean_identifier(t_name)}"
-                        df = pd.read_sql(text(f'SELECT * FROM "{target_schema}"."{t_name}"'), conn)
+                        df = pd.read_sql(text(f'SELECT * FROM "{t_name}"'), conn)
                         loaded_dfs[clean_var] = df
                         if "data" not in loaded_dfs:
                             loaded_dfs["data"] = df
-                queries = [f'SELECT * FROM "{target_schema}"."{t}"' for t in resolved_tables]
+                queries = [f'SELECT * FROM "{t}"' for t in resolved_tables]
                 executed_sql = ";\n".join(queries) + ";"
             except Exception as ex:
                 logger.warning(f"Failed to load table(s) {resolved_tables} from schema '{target_schema}': {ex}")
@@ -299,12 +299,12 @@ class MLAgent:
                     ]
                     for t_name in schema_tables:
                         clean_var = f"data_{self._clean_identifier(t_name)}"
-                        df = pd.read_sql(text(f'SELECT * FROM "{target_schema}"."{t_name}"'), conn)
+                        df = pd.read_sql(text(f'SELECT * FROM "{t_name}"'), conn)
                         loaded_dfs[clean_var] = df
                         if "data" not in loaded_dfs:
                             loaded_dfs["data"] = df
                     if schema_tables:
-                        queries = [f'SELECT * FROM "{target_schema}"."{t}"' for t in schema_tables]
+                        queries = [f'SELECT * FROM "{t}"' for t in schema_tables]
                         executed_sql = ";\n".join(queries) + ";"
             except Exception as ex:
                 logger.debug(f"Could not load tables from schema '{target_schema}': {ex}")
@@ -580,12 +580,14 @@ class MLAgent:
             handler = gen_span.get_langchain_handler()
             config = {"callbacks": [handler]} if handler else {}
 
+            chart_guidelines = prompt_loader.render("chart_guidelines")
             prompt = prompt_loader.render(
                 "code_generation",
                 task_description=task_desc,
                 dataset_preview=state.get("dataset_preview", ""),
                 is_multi_dataset=state.get("is_multi_dataset", False),
                 copy_instructions=state.get("copy_instructions", "df = data.copy()"),
+                chart_guidelines=chart_guidelines,
             )
 
             messages = [
@@ -715,6 +717,7 @@ class MLAgent:
             handler = rep_span.get_langchain_handler()
             config = {"callbacks": [handler]} if handler else {}
 
+            chart_guidelines = prompt_loader.render("chart_guidelines")
             prompt = prompt_loader.render(
                 "code_repair",
                 task_description=state.get("task_description", ""),
@@ -723,6 +726,7 @@ class MLAgent:
                 error_trace=state.get("error_trace", ""),
                 is_multi_dataset=state.get("is_multi_dataset", False),
                 copy_instructions=state.get("copy_instructions", "df = data.copy()"),
+                chart_guidelines=chart_guidelines,
             )
 
             messages = [
@@ -780,9 +784,10 @@ class MLAgent:
                 )
                 return {"response": error_summary}
 
+            task_desc = state.get("task_description", "")
             prompt = prompt_loader.render(
                 "summary",
-                task_description=state.get("task_description", ""),
+                task_description=task_desc,
                 stdout=stdout,
                 charts=charts,
                 plots=plots,

@@ -24,9 +24,9 @@ Execution Error & Traceback:
 Fix Instructions:
 - Identify the root cause of the error from the traceback (column names, types, missing values, or plotting).
 - Fix the error while fulfilling the user's task goal with appropriate ML algorithms.
-- Visualizations: Keep each visualization as an independent separate figure saved to its own JSON file, avoiding make_subplots or combined dashboards.
-- Chart titles: Set concise titles (4–5 words maximum).
-- Legend titles: When a legend is present, give it a descriptive title (such as 'Cluster', 'Category', or feature name) or clear it via fig.update_layout(legend_title_text=''), avoiding placeholder labels like 'color'.
+{% if chart_guidelines %}
+{{ chart_guidelines }}
+{% endif %}
 - Console output: Print substantive numerical metrics and key findings, avoiding generic status messages.
-- Do not write any comments in the code. Write clean, self-explanatory code without comments.
+- Write clean, self-explanatory code without comments.
 - Provide the complete corrected Python code in a ```python ``` block without surrounding conversational text.

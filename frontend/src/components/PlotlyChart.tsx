@@ -67,19 +67,53 @@ function sanitizePlotlyLayout(spec: Record<string, any>): Record<string, any> {
     cleanLegendLayout(tLayout);
   }
 
-  // Clear uninformative colorbar titles if set to default 'color'
+  // Clear uninformative colorbar titles and sanitize hover tooltips
   if (Array.isArray(cloned.data)) {
     cloned.data.forEach((trace: any) => {
-      if (trace && typeof trace === 'object' && trace.marker && typeof trace.marker === 'object') {
-        const colorbar = trace.marker.colorbar;
-        if (colorbar && typeof colorbar === 'object') {
-          if (colorbar.title && typeof colorbar.title === 'object') {
-            if (isRawColorTitle(colorbar.title.text)) {
-              colorbar.title.text = '';
+      if (trace && typeof trace === 'object') {
+        if (trace.marker && typeof trace.marker === 'object') {
+          const colorbar = trace.marker.colorbar;
+          if (colorbar && typeof colorbar === 'object') {
+            if (colorbar.title && typeof colorbar.title === 'object') {
+              if (isRawColorTitle(colorbar.title.text)) {
+                colorbar.title.text = '';
+              }
+            } else if (isRawColorTitle(colorbar.title)) {
+              colorbar.title = '';
             }
-          } else if (isRawColorTitle(colorbar.title)) {
-            colorbar.title = '';
           }
+        }
+
+        // For box plots, ensure clean quartile statistics without legend clutter
+        if (trace.type === 'box') {
+          if (
+            !trace.hovertemplate ||
+            trace.hovertemplate.includes('%{max}') ||
+            trace.hovertemplate.includes('%{q3}') ||
+            trace.hovertemplate.includes('%{y}<extra></extra>')
+          ) {
+            delete trace.hovertemplate;
+            const hasX = trace.x && (Array.isArray(trace.x) ? trace.x.length > 0 : true);
+            trace.hoverinfo = hasX ? 'x+y' : 'y';
+          }
+        }
+
+        // Strip secondary legend box from hovertemplate if present without <extra>
+        if (typeof trace.hovertemplate === 'string') {
+          if (!trace.hovertemplate.includes('<extra>')) {
+            trace.hovertemplate = trace.hovertemplate + '<extra></extra>';
+          } else if (
+            trace.hovertemplate.includes('<extra>%{') ||
+            (trace.name && trace.hovertemplate.includes('<extra>' + trace.name + '</extra>'))
+          ) {
+            trace.hovertemplate = trace.hovertemplate.split('<extra>')[0] + '<extra></extra>';
+          }
+        }
+
+        // If hoverinfo includes 'name', remove 'name' so legend trace name does not appear in tooltip
+        if (typeof trace.hoverinfo === 'string' && trace.hoverinfo.includes('name')) {
+          const parts = trace.hoverinfo.split('+').filter((p: string) => p !== 'name');
+          trace.hoverinfo = parts.length > 0 ? parts.join('+') : 'x+y';
         }
       }
     });

@@ -22,7 +22,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: ai-service
+    container_name: ai
     restart: unless-stopped
     command: ["python", "-m", "agents.service"]
     environment:
@@ -53,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: backend-service
+    container_name: backend
     restart: unless-stopped
     command: ["python", "-m", "backend"]
     environment:
