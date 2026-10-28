@@ -62,6 +62,30 @@ def _sanitize_text(value: Any) -> str:
     return text_val.strip()
 
 
+def _humanize_category_segment(segment: Any) -> str:
+    """
+    Formats fused CamelCase and punctuation into clean readable names without regex.
+    Examples:
+      'HomeTheater,TV&Video' -> 'Home Theater, TV & Video'
+      'SmallKitchenAppliances' -> 'Small Kitchen Appliances'
+      'USBCables' -> 'USB Cables'
+      'WirelessUSBAdapters' -> 'Wireless USB Adapters'
+    """
+    if not segment or pd.isna(segment):
+        return ""
+    s = str(segment).replace("&", " & ").replace(",", ", ").replace("/", " / ")
+    chars: List[str] = []
+    for i, ch in enumerate(s):
+        if i > 0 and ch.isupper():
+            prev = s[i - 1]
+            if prev.islower():
+                chars.append(" ")
+            elif prev.isupper() and i + 1 < len(s) and s[i + 1].islower():
+                chars.append(" ")
+        chars.append(ch)
+    return " ".join("".join(chars).split())
+
+
 def _clean_price(value: Any) -> float:
     if pd.isna(value):
         return 0.0
@@ -162,17 +186,47 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
     category_map: Dict[str, int] = {}
     categories_data: List[Dict[str, Any]] = []
 
+    # First pass: parse hierarchy segments and count leaf occurrences for disambiguation
+    parsed_categories: List[Dict[str, Any]] = []
+    leaf_occurrences: Dict[str, int] = {}
+
     for cat_id, cat_str in enumerate(unique_categories, start=1):
         clean_cat = _sanitize_text(cat_str)
-        parts = [p.strip() for p in clean_cat.split("|") if p.strip()]
-        main_cat = parts[0] if parts else "General"
-        sub_cat = parts[1] if len(parts) > 1 else main_cat
-        category_map[str(cat_str)] = cat_id
+        raw_parts = [p.strip() for p in clean_cat.split("|") if p.strip()]
+        clean_parts = [_humanize_category_segment(p) for p in raw_parts]
+        main_cat = clean_parts[0] if clean_parts else "General"
+        sub_cat = clean_parts[1] if len(clean_parts) > 1 else main_cat
+        leaf_cat = clean_parts[-1] if clean_parts else main_cat
+        category_path = " > ".join(clean_parts) if clean_parts else main_cat
+
+        leaf_occurrences[leaf_cat] = leaf_occurrences.get(leaf_cat, 0) + 1
+        parsed_categories.append({
+            "id": cat_id,
+            "raw_str": str(cat_str),
+            "main_cat": main_cat,
+            "sub_cat": sub_cat,
+            "leaf_cat": leaf_cat,
+            "category_path": category_path,
+        })
+
+    # Second pass: construct clean names and populate categories_data
+    for item in parsed_categories:
+        cat_id = item["id"]
+        category_map[item["raw_str"]] = cat_id
+        leaf_cat = item["leaf_cat"]
+        # Disambiguate duplicate leaf names by qualifying with subcategory
+        display_name = (
+            f"{leaf_cat} ({item['sub_cat']})"
+            if leaf_occurrences.get(leaf_cat, 0) > 1
+            else leaf_cat
+        )
         categories_data.append({
             "id": cat_id,
-            "name": clean_cat[:255],
-            "main_category": main_cat[:100],
-            "sub_category": sub_cat[:100],
+            "name": display_name[:255],
+            "main_category": item["main_cat"][:100],
+            "sub_category": item["sub_cat"][:100],
+            "leaf_category": leaf_cat[:100],
+            "category_path": item["category_path"][:255],
         })
 
     # 2. Products (deduplicate by product_id)
@@ -303,9 +357,11 @@ def create_schema_tables(conn: Any) -> None:
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS categories (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) UNIQUE NOT NULL,
+            name VARCHAR(255) NOT NULL,
             main_category VARCHAR(100) NOT NULL,
-            sub_category VARCHAR(100) NOT NULL
+            sub_category VARCHAR(100) NOT NULL,
+            leaf_category VARCHAR(100) NOT NULL,
+            category_path VARCHAR(255) NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS products (
@@ -349,6 +405,9 @@ def create_schema_tables(conn: Any) -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE INDEX IF NOT EXISTS idx_categories_main_category ON categories(main_category);
+        CREATE INDEX IF NOT EXISTS idx_categories_sub_category ON categories(sub_category);
+        CREATE INDEX IF NOT EXISTS idx_categories_leaf_category ON categories(leaf_category);
         CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
         CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
         CREATE INDEX IF NOT EXISTS idx_orders_product_id ON orders(product_id);
@@ -423,8 +482,8 @@ def seed_database(engine: Engine, reset: bool = False) -> None:
         logger.info(f"Inserting {len(categories_data)} categories...")
         conn.execute(
             text("""
-                INSERT INTO categories (id, name, main_category, sub_category)
-                VALUES (:id, :name, :main_category, :sub_category)
+                INSERT INTO categories (id, name, main_category, sub_category, leaf_category, category_path)
+                VALUES (:id, :name, :main_category, :sub_category, :leaf_category, :category_path)
                 ON CONFLICT (id) DO NOTHING;
             """),
             categories_data,
