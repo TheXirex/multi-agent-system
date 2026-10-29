@@ -129,7 +129,9 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: '460px',
+          maxWidth: '360px',
+          maxHeight: '90vh',
+          height: 'auto',
           backgroundColor: '#212529',
           border: '1px solid #495057',
           borderRadius: '8px',
@@ -137,19 +139,20 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          transition: 'all 0.2s ease',
         }}
       >
         {/* Modal Header */}
         <div
           style={{
-            padding: '14px 18px',
+            padding: '12px 16px',
             borderBottom: '1px solid #343a40',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
           }}
         >
-          <span style={{ fontSize: '14px', fontWeight: 600, color: '#f8f9fa' }}>
+          <span style={{ fontSize: '13.5px', fontWeight: 600, color: '#f8f9fa' }}>
             Attach Dataset File
           </span>
           <button
@@ -164,7 +167,7 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div style={{ padding: '18px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
           <input
             type="file"
             ref={fileInputRef}
@@ -183,7 +186,7 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
               border: `2px dashed ${isDragging ? '#f8f9fa' : '#495057'}`,
               backgroundColor: isDragging ? '#343a40' : '#181a1d',
               borderRadius: '6px',
-              padding: '28px 20px',
+              padding: '22px 16px',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
@@ -191,7 +194,7 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
               cursor: 'pointer',
               transition: 'background-color 0.15s ease, border-color 0.15s ease',
               textAlign: 'center',
-              gap: '10px',
+              gap: '8px',
             }}
           >
             <div
@@ -289,12 +292,12 @@ const FileAttachModalContent: React.FC<FileAttachModalContentProps> = ({
         {/* Modal Footer */}
         <div
           style={{
-            padding: '12px 18px',
+            padding: '10px 16px',
             borderTop: '1px solid #343a40',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'flex-end',
-            gap: '10px',
+            gap: '8px',
             backgroundColor: '#1c1f23',
           }}
         >

@@ -1,11 +1,11 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
 import type { Message } from '../types';
 import { marked } from 'marked';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-sql';
 import 'prismjs/themes/prism-tomorrow.css';
-import { Paperclip, Send, User, X, ArrowRightToLine, FileSpreadsheet, ChevronDown, ChevronRight, Terminal, Code } from 'lucide-react';
+import { Paperclip, Send, User, X, ArrowRightToLine, FileSpreadsheet } from 'lucide-react';
 import { PlotlyChart } from './PlotlyChart';
 import { CodeViewer } from './CodeViewer';
 import { FileAttachModal } from './FileAttachModal';
@@ -21,10 +21,11 @@ interface ChatProps {
 }
 
 const DEFAULT_SUGGESTIONS = [
-  'Show summary statistics and distribution of customer age and spending score',
-  'Train a K-Means clustering model to find customer segments and visualize with PCA',
-  'List all database tables and dataset records currently available',
-  'Train a regression model to predict spending score based on customer features',
+  'What can you do and how can you help me analyze data?',
+  'What tables and datasets are available in the database?',
+  'Which top 10 product categories have the highest catalog volume?',
+  'Does offering higher discounts impact customer ratings? Visualize the relationship',
+  'Segment products based on prices, discounts, and ratings to uncover market tiers',
 ];
 
 export const Chat: React.FC<ChatProps> = ({
@@ -39,9 +40,43 @@ export const Chat: React.FC<ChatProps> = ({
   const [inputText, setInputText] = useState('');
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
-  const [expandedCodeCards, setExpandedCodeCards] = useState<Record<string, boolean>>({});
 
   const messagesScrollRef = useRef<HTMLDivElement>(null);
+  const [scrollGutter, setScrollGutter] = useState<number>(() => 10);
+
+  // Measure active scrollbar width and include it into right padding so static gaps remain balanced
+  useLayoutEffect(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+
+    const updateGutter = () => {
+      // offsetWidth is outer layout box; clientWidth is inner area excluding scrollbar.
+      // With border: 0, (offsetWidth - clientWidth) yields the active scrollbar reservation width.
+      const sw = Math.max(0, el.offsetWidth - el.clientWidth);
+      setScrollGutter(sw);
+    };
+
+    updateGutter();
+    const rafId = requestAnimationFrame(updateGutter);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(() => {
+        updateGutter();
+      });
+      resizeObserver.observe(el);
+    }
+
+    window.addEventListener('resize', updateGutter);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+      window.removeEventListener('resize', updateGutter);
+    };
+  }, [messages, isBusy]);
 
   // Only show the version restore arrow when there are 2 or more orchestrator states
   const orchestratorStatesCount =
@@ -79,10 +114,6 @@ export const Chat: React.FC<ChatProps> = ({
     await onSendQuery(text, fileToSend);
   };
 
-  const toggleExpand = (cardKey: string) => {
-    setExpandedCodeCards((prev) => ({ ...prev, [cardKey]: !prev[cardKey] }));
-  };
-
   return (
     <div className="panel-card">
       {/* 1. Chat Message Stream */}
@@ -92,7 +123,10 @@ export const Chat: React.FC<ChatProps> = ({
         style={{
           flex: 1,
           overflowY: 'auto',
-          padding: '16px',
+          paddingTop: '16px',
+          paddingBottom: '16px',
+          paddingLeft: '16px',
+          paddingRight: `${Math.max(0, 16 - scrollGutter)}px`,
           display: 'flex',
           flexDirection: 'column',
           gap: '16px',
@@ -309,80 +343,30 @@ export const Chat: React.FC<ChatProps> = ({
                 </div>
               )}
 
-              {/* Expandable Python script */}
+              {/* Python script widget */}
               {msg.pythonScript && (
-                <div style={{ borderRadius: 'var(--app-radius)', border: '1px solid rgba(73, 80, 87, 0.7)', overflow: 'hidden' }}>
-                  <div
-                    onClick={() => toggleExpand(`py-${index}`)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#212529',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      color: '#ced4da',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Terminal size={14} color="#adb5bd" />
-                      <span>{msg.metadata?.code_title || msg.metadata?.task_description || 'Generated ML Python Script'}</span>
-                    </div>
-                    {expandedCodeCards[`py-${index}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </div>
-                  {expandedCodeCards[`py-${index}`] && (
-                    <div style={{ padding: '8px', backgroundColor: '#1c1f23' }}>
-                      <CodeViewer
-                        code={msg.pythonScript}
-                        language="python"
-                        title={msg.metadata?.code_title || msg.metadata?.task_description || 'Machine Learning Python Script'}
-                      />
-                    </div>
-                  )}
-                </div>
+                <CodeViewer
+                  code={msg.pythonScript}
+                  language="python"
+                  title={msg.metadata?.code_title || msg.metadata?.task_description || 'Machine Learning Python Script'}
+                  collapsible={true}
+                  defaultExpanded={false}
+                />
               )}
 
-              {/* Expandable SQL query */}
+              {/* SQL query widget */}
               {msg.sqlQuery && (
-                <div style={{ borderRadius: 'var(--app-radius)', border: '1px solid rgba(73, 80, 87, 0.7)', overflow: 'hidden' }}>
-                  <div
-                    onClick={() => toggleExpand(`sql-${index}`)}
-                    style={{
-                      padding: '8px 12px',
-                      backgroundColor: '#212529',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                      color: '#ced4da',
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Code size={14} color="#adb5bd" />
-                      <span>
-                        {msg.metadata?.sql_description ||
-                          msg.datasetData?.name ||
-                          'Executed PostgreSQL Query'}
-                      </span>
-                    </div>
-                    {expandedCodeCards[`sql-${index}`] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  </div>
-                  {expandedCodeCards[`sql-${index}`] && (
-                    <div style={{ padding: '8px', backgroundColor: '#1c1f23' }}>
-                      <CodeViewer
-                        code={msg.sqlQuery}
-                        language="sql"
-                        title={
-                          msg.metadata?.sql_description ||
-                          msg.datasetData?.name ||
-                          'PostgreSQL Query Statement'
-                        }
-                      />
-                    </div>
-                  )}
-                </div>
+                <CodeViewer
+                  code={msg.sqlQuery}
+                  language="sql"
+                  title={
+                    msg.metadata?.sql_description ||
+                    msg.datasetData?.name ||
+                    'Executed PostgreSQL Query'
+                  }
+                  collapsible={true}
+                  defaultExpanded={false}
+                />
               )}
             </div>
           );

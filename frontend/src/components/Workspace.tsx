@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import type { TurnArtifacts } from '../types';
 import {
   Table as TableIcon,
@@ -97,6 +97,36 @@ export const Workspace: React.FC<WorkspaceProps> = ({
     (tablePage - 1) * rowsPerPage,
     tablePage * rowsPerPage
   );
+
+  const bodyScrollRef = useRef<HTMLDivElement>(null);
+  const [scrollGutter, setScrollGutter] = useState<number>(0);
+
+  useEffect(() => {
+    const el = bodyScrollRef.current;
+    if (!el) return;
+
+    const updateGutter = () => {
+      const sw = Math.max(0, el.offsetWidth - el.clientWidth);
+      setScrollGutter(sw);
+    };
+
+    updateGutter();
+    const rafId = requestAnimationFrame(updateGutter);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(updateGutter);
+      resizeObserver.observe(el);
+    }
+
+    window.addEventListener('resize', updateGutter);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      if (resizeObserver) resizeObserver.disconnect();
+      window.removeEventListener('resize', updateGutter);
+    };
+  }, [activeTab, activeTurn]);
 
   return (
     <div className="panel-card">
@@ -220,7 +250,19 @@ export const Workspace: React.FC<WorkspaceProps> = ({
       </div>
 
       {/* 2. Main Tab Body */}
-      <div className="scroll-auto-hide" style={{ flex: 1, overflowY: 'auto', padding: '12px', minHeight: 0 }}>
+      <div
+        ref={bodyScrollRef}
+        className="scroll-auto-hide"
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          paddingTop: '12px',
+          paddingBottom: '12px',
+          paddingLeft: '12px',
+          paddingRight: `${Math.max(0, 12 - scrollGutter)}px`,
+          minHeight: 0,
+        }}
+      >
         {/* ========================================================= */}
         {/* TAB 1: TABLE DATA */}
         {/* ========================================================= */}
@@ -286,14 +328,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                       style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '6px',
+                        gap: '5px',
                         backgroundColor: '#343a40',
                         border: '1px solid #495057',
                         borderRadius: 'var(--app-radius)',
-                        padding: '2px 8px',
+                        padding: '2px 6px',
+                        maxWidth: '125px',
                       }}
                     >
-                      <Search size={13} color="#adb5bd" />
+                      <Search size={12} color="#adb5bd" style={{ flexShrink: 0 }} />
                       <input
                         type="text"
                         placeholder="Search records..."
@@ -306,10 +349,11 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                           background: 'transparent',
                           border: 'none',
                           boxShadow: 'none',
+                          outline: 'none',
                           fontSize: '11px',
                           color: '#f8f9fa',
-                          width: '140px',
-                          padding: '2px 0',
+                          width: '95px',
+                          padding: '1px 0',
                         }}
                       />
                     </div>
@@ -331,6 +375,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                         {columns.map((col, idx) => (
                           <th
                             key={idx}
+                            title={col.label || col.name}
                             style={{
                               padding: '8px 12px',
                               textAlign: 'left',
@@ -354,23 +399,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                             backgroundColor: rIdx % 2 === 0 ? 'rgba(52, 58, 64, 0.2)' : 'transparent',
                           }}
                         >
-                          {columns.map((col, cIdx) => (
-                            <td
-                              key={cIdx}
-                              style={{
-                                padding: '6px 12px',
-                                color: '#dee2e6',
-                                whiteSpace: 'nowrap',
-                                maxWidth: '240px',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                              }}
-                            >
-                              {row[col.name] !== undefined && row[col.name] !== null
-                                ? String(row[col.name])
-                                : <span style={{ color: '#6c757d' }}>null</span>}
-                            </td>
-                          ))}
+                          {columns.map((col, cIdx) => {
+                            const rawVal = row[col.name];
+                            const strVal = rawVal !== undefined && rawVal !== null ? String(rawVal) : null;
+                            return (
+                              <td
+                                key={cIdx}
+                                title={strVal !== null ? strVal : undefined}
+                                style={{
+                                  padding: '6px 12px',
+                                  color: '#dee2e6',
+                                  whiteSpace: 'nowrap',
+                                  maxWidth: '240px',
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                }}
+                              >
+                                {strVal !== null ? strVal : <span style={{ color: '#6c757d' }}>null</span>}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>

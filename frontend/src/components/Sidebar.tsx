@@ -262,7 +262,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: '380px',
+              maxWidth: '340px',
+              maxHeight: '90vh',
+              height: 'auto',
               backgroundColor: '#212529',
               border: '1px solid #495057',
               borderRadius: 'var(--app-radius)',

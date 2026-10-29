@@ -20,32 +20,32 @@ QUESTIONS = [
     },
     {
         "category": "2. Metric Distribution",
-        "query": "Analyze how the discount percentage (discount_percentage) is distributed across all products.",
+        "query": "How are discount percentages distributed across all products in our catalog?",
         "expected": "Histogram with bin borders",
     },
     {
         "category": "3. Correlation Between Two Variables",
-        "query": "Is there a relationship between the discount percentage (discount_percentage) and the final product rating?",
+        "query": "Does a higher discount percentage impact customer ratings? Show the relationship with a trendline.",
         "expected": "Scatter Plot with OLS trendline",
     },
     {
         "category": "4. Time Series Trend",
-        "query": "How has the dynamic of total order amounts changed by month over the entire recorded time?",
+        "query": "How has total order revenue evolved month by month over the entire recorded timeline?",
         "expected": "Line Chart with markers",
     },
     {
         "category": "5. Multi-Feature Correlation Matrix",
-        "query": "Explore the mutual correlation between all numerical product metrics (actual_price, discounted_price, discount_percentage, rating, rating_count).",
+        "query": "Explore the mutual correlation between all numeric metrics including prices, discounts, ratings, and review counts.",
         "expected": "Heatmap matrix",
     },
     {
         "category": "6. Composition / Proportions",
-        "query": "What is the breakdown and structural share of orders across different order statuses (status)?",
+        "query": "What is the breakdown and structural share of orders across different order fulfillment statuses?",
         "expected": "Donut Chart",
     },
     {
         "category": "7. Clustering & Segmentation",
-        "query": "Perform clustering of products based on prices, discount percentage, and ratings to identify typical price and quality segments.",
+        "query": "Segment products based on prices, discounts, and ratings to uncover typical price and quality market tiers.",
         "expected": "Cluster Scatter Plot",
     },
 ]
