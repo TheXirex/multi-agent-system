@@ -1,7 +1,3 @@
-"""
-Guardrail utilities for the Orchestrator Agent.
-Enforces domain boundary policies and handles out-of-scope query refusals.
-"""
 import logging
 from typing import Any, Dict
 
@@ -18,29 +14,12 @@ DEFAULT_REFUSAL_MESSAGE = (
 
 
 def is_in_scope(state: OrchestratorState) -> bool:
-    """
-    Evaluates whether the user request state is within the allowed domain scope.
-
-    Args:
-        state (OrchestratorState): The current Orchestrator graph state.
-
-    Returns:
-        bool: True if request is in-scope, False otherwise.
-    """
+    """Evaluates whether the user request state is within the allowed domain scope."""
     return bool(state.get("is_in_scope", True))
 
 
 def create_guardrail_refusal_response(state: OrchestratorState) -> Dict[str, Any]:
-    """
-    Constructs a deterministic refusal response dictionary for out-of-scope queries.
-    Prevents any tool execution and registers guardrail metadata.
-
-    Args:
-        state (OrchestratorState): The current Orchestrator graph state.
-
-    Returns:
-        Dict[str, Any]: State update payload with refusal response and metadata.
-    """
+    """Constructs a deterministic refusal response dictionary for out-of-scope queries."""
     direct_text = (state.get("direct_response") or "").strip()
     rejection_reason = state.get("rejection_reason") or "Request is out of scope"
     user_query = state.get("user_query", "")

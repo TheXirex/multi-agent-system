@@ -63,7 +63,7 @@ class StepExecutionResult(BaseModel):
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Arguments passed to the tool")
     raw_content: Any = Field(default=None, description="Raw output content from MCP tool call")
     structured_data: Optional[Dict[str, Any]] = Field(default=None, description="Parsed structured JSON output payload")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Extracted domain metadata (CSV table, SQL queries)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Extracted domain metadata (tables, charts, scripts, SQL queries)")
     success: bool = Field(default=True, description="Whether tool execution succeeded")
     error: Optional[str] = Field(default=None, description="Error message if execution failed")
 
@@ -75,7 +75,7 @@ class RawExecutionAnswer(BaseModel):
 
     steps: List[StepExecutionResult] = Field(default_factory=list, description="List of individual step execution results")
     raw_text: str = Field(default="", description="Consolidated textual summary across all executed steps")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Consolidated domain metadata (tables and SQL)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Consolidated domain metadata (tables, charts, scripts, SQL)")
 
 
 class FinalOrchestratorResult(BaseModel):
@@ -87,17 +87,16 @@ class FinalOrchestratorResult(BaseModel):
     plan: ExecutionPlan = Field(description="Orchestrator execution plan")
     raw_answer: RawExecutionAnswer = Field(default_factory=RawExecutionAnswer, description="Raw tool execution details and outputs")
     final_response: str = Field(description="Final user-facing response synthesized by Orchestrator")
-    metadata: Dict[str, Any] = Field(default_factory=dict, description="Domain metadata (table, SQL queries)")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Domain metadata (tables, charts, scripts, SQL queries)")
     trace_id: Optional[str] = Field(default=None, description="Langfuse trace identifier")
 
     @property
     def response(self) -> str:
+        """Returns the synthesized final user-facing response text."""
         return self.final_response
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Converts result into dictionary payload for API responses.
-        """
+        """Converts result into a dictionary payload for API responses."""
         return {
             "user_query": self.user_query,
             "response": self.final_response,

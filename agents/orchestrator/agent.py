@@ -1,9 +1,7 @@
 import asyncio
 import contextvars
-import json
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
-
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -62,28 +60,22 @@ class OrchestratorAgent:
         llm: BaseLLM,
         mcp_manager: Optional[MCPClientManager] = None,
     ) -> None:
+        """Initializes the Orchestrator Agent with an LLM wrapper and MCP client manager."""
         self.llm = llm
         self.chat_model: BaseChatModel = llm.get_chat_model()
         self.mcp_manager = mcp_manager or MCPClientManager()
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
-        """
-        Constructs the LangGraph state graph for Orchestrator execution.
-
-        Returns:
-            CompiledStateGraph: The compiled runnable state graph.
-        """
+        """Constructs and compiles the LangGraph state graph for Orchestrator execution."""
         workflow = StateGraph(OrchestratorState)
 
-        # Graph nodes
         workflow.add_node("route_and_plan", self._route_and_plan_node)
         workflow.add_node("direct_response", self._direct_response_node)
         workflow.add_node("execute_tools", self._execute_tools_node)
         workflow.add_node("synthesize_response", self._synthesize_response_node)
         workflow.add_node("guardrail_refusal", self._guardrail_refusal_node)
 
-        # Edges
         workflow.add_edge(START, "route_and_plan")
         workflow.add_conditional_edges(
             "route_and_plan",
@@ -101,11 +93,156 @@ class OrchestratorAgent:
 
         return workflow.compile()
 
+    @staticmethod
+    def _build_initial_state(
+        user_query: str,
+        tools: List[ToolDefinition],
+        conversation_history: Optional[List[Dict[str, Any]]] = None,
+        active_metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+    ) -> OrchestratorState:
+        """
+        Creates a standardized initial OrchestratorState dictionary for graph execution.
+
+        Args:
+            user_query (str): Natural language query from the user.
+            tools (List[ToolDefinition]): Discovered MCP tools available for planning.
+            conversation_history (Optional[List[Dict[str, Any]]]): Prior conversation messages.
+            active_metadata (Optional[Dict[str, Any]]): Active session context metadata.
+            session_id (Optional[str]): Active chat session identifier.
+
+        Returns:
+            OrchestratorState: Initialized state dictionary.
+        """
+        return {
+            "user_query": user_query,
+            "tools": tools,
+            "conversation_history": conversation_history or [],
+            "active_metadata": active_metadata or {},
+            "is_in_scope": True,
+            "rejection_reason": None,
+            "requires_tools": False,
+            "direct_response": "",
+            "thought": "",
+            "steps": [],
+            "execution_results": [],
+            "raw_text": "",
+            "metadata": {"session_id": session_id} if session_id else {},
+            "final_response": "",
+            "error": None,
+        }
+
+    @staticmethod
+    def _extract_clarification_response(
+        step_results: List[StepExecutionResult],
+        metadata: Dict[str, Any],
+        raw_text: str,
+    ) -> Optional[str]:
+        """Checks whether any executed tool step or consolidated metadata requested user clarification."""
+        for res in step_results:
+            data = res.structured_data if isinstance(res.structured_data, dict) else {}
+            if data.get("status") == "clarification_needed":
+                return data.get("response") or data.get("message") or raw_text
+        if metadata.get("status") == "clarification_needed":
+            return raw_text
+        return None
+
+    async def _execute_single_step(
+        self,
+        session: ActiveMCPSession,
+        step: PlanStep,
+        active_meta: Dict[str, Any],
+        consolidated_metadata: Dict[str, Any],
+        session_id: Optional[str],
+        last_dataset_id: Optional[int],
+        last_exported_csv: Optional[str],
+        trace: Optional[Any],
+    ) -> Tuple[StepExecutionResult, Optional[str], Optional[int], Optional[str]]:
+        """
+        Executes a single planned tool step via the active MCP session with tracing and metadata consolidation.
+
+        Args:
+            session (ActiveMCPSession): Connected MCP client session.
+            step (PlanStep): Planned tool step to execute.
+            active_meta (Dict[str, Any]): Mutable active session metadata updated in-place.
+            consolidated_metadata (Dict[str, Any]): Mutable consolidated turn metadata updated in-place.
+            session_id (Optional[str]): Active chat session identifier.
+            last_dataset_id (Optional[int]): Most recent dataset identifier from prior steps.
+            last_exported_csv (Optional[str]): Most recent dataset name/path from prior steps.
+            trace (Optional[Any]): Active Langfuse trace or span context.
+
+        Returns:
+            Tuple[StepExecutionResult, Optional[str], Optional[int], Optional[str]]:
+                Executed step result, extracted step text (or error message), updated last_dataset_id, and updated last_exported_csv.
+        """
+        logger.info(f"Executing step {step.step_id}: {step.tool_name}")
+
+        step_args = resolve_tool_arguments(
+            tool_name=step.tool_name,
+            raw_arguments=step.arguments,
+            active_metadata=active_meta,
+            session_id=session_id,
+            last_dataset_id=last_dataset_id,
+            last_exported_csv=last_exported_csv,
+        )
+
+        with trace_span(
+            f"orchestrator.{step.tool_name}",
+            parent=trace,
+            input_data={
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "arguments": step_args,
+                "active_metadata_before_step": dict(active_meta),
+            },
+            metadata={
+                "step_id": step.step_id,
+                "tool_name": step.tool_name,
+                "active_metadata_before_step": dict(active_meta),
+            },
+        ) as step_span:
+            if trace and getattr(trace, "id", None):
+                step_args["trace_id"] = trace.id
+                step_args["parent_observation_id"] = getattr(step_span, "id", None)
+
+            result = await session.call_tool(
+                tool_name=step.tool_name,
+                arguments=step_args,
+                step_id=step.step_id,
+            )
+
+            if not result.success:
+                logger.warning(f"Step {step.step_id} failed: {result.error}")
+                step_span.update(
+                    level="ERROR",
+                    status_message=result.error or "Step execution failed",
+                    output={"error": result.error},
+                )
+                return result, f"[Step {step.step_id} - Error]: {result.error}", last_dataset_id, last_exported_csv
+
+            step_text = extract_step_text(result)
+            last_dataset_id, last_exported_csv = consolidate_step_metadata(
+                result=result,
+                consolidated_metadata=consolidated_metadata,
+                last_dataset_id=last_dataset_id,
+                last_exported_csv=last_exported_csv,
+            )
+            active_meta.update(consolidated_metadata)
+
+            step_span.update(
+                output={
+                    "step_text": step_text,
+                    "structured_data": result.structured_data,
+                },
+                metadata={
+                    "consolidated_metadata_after_step": dict(consolidated_metadata),
+                    "last_dataset_id": last_dataset_id,
+                },
+            )
+            return result, step_text, last_dataset_id, last_exported_csv
+
     async def _route_and_plan_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        """
-        Node that determines if query requires tools or should be answered directly
-        using model-level structured output bound to ExecutionPlan.
-        """
+        """Determines whether the user query requires MCP tools, a direct response, or a guardrail refusal."""
         user_query = state.get("user_query", "")
         tools = state.get("tools", [])
         conversation_history = state.get("conversation_history", [])
@@ -205,10 +342,7 @@ class OrchestratorAgent:
                 }
 
     def _route_after_planning(self, state: OrchestratorState) -> Literal["execute", "direct", "refusal"]:
-        """
-        Conditional edge: routes to tool execution, direct conversational answer,
-        or guardrail refusal for out-of-scope requests.
-        """
+        """Routes execution after planning to tool invocation, direct response, or guardrail refusal."""
         if not is_in_scope(state):
             return "refusal"
         if state.get("requires_tools") and state.get("steps"):
@@ -216,10 +350,7 @@ class OrchestratorAgent:
         return "direct"
 
     async def _guardrail_refusal_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        """
-        Guardrail node: handles rejected out-of-scope queries deterministically,
-        preventing any tool execution and returning a polite refusal.
-        """
+        """Handles rejected out-of-scope queries deterministically without invoking domain tools."""
         trace = _current_trace.get()
         user_query = state.get("user_query", "")
         with trace_span(
@@ -239,9 +370,7 @@ class OrchestratorAgent:
             return res
 
     async def _direct_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        """
-        Node that completes conversational answer when no domain tools are needed.
-        """
+        """Generates a conversational answer directly when no domain tools are required."""
         trace = _current_trace.get()
         user_query = state.get("user_query", "")
         with trace_span(
@@ -276,9 +405,7 @@ class OrchestratorAgent:
             }
 
     async def _execute_tools_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        """
-        Node that executes planned steps via the active MCP session.
-        """
+        """Executes all planned tool steps sequentially via the active MCP session."""
         session = _current_mcp_session.get()
         if not session:
             raise RuntimeError("Active MCP session is not available in execution node.")
@@ -294,75 +421,19 @@ class OrchestratorAgent:
         last_exported_csv: Optional[str] = None
 
         for step in steps:
-            logger.info(f"Executing step {step.step_id}: {step.tool_name}")
-
-            step_args = resolve_tool_arguments(
-                tool_name=step.tool_name,
-                raw_arguments=step.arguments,
-                active_metadata=active_meta,
+            result, step_text, last_dataset_id, last_exported_csv = await self._execute_single_step(
+                session=session,
+                step=step,
+                active_meta=active_meta,
+                consolidated_metadata=consolidated_metadata,
                 session_id=session_id,
                 last_dataset_id=last_dataset_id,
                 last_exported_csv=last_exported_csv,
+                trace=trace,
             )
-
-            with trace_span(
-                f"orchestrator.{step.tool_name}",
-                parent=trace,
-                input_data={
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                    "arguments": step_args,
-                    "active_metadata_before_step": dict(active_meta),
-                },
-                metadata={
-                    "step_id": step.step_id,
-                    "tool_name": step.tool_name,
-                    "active_metadata_before_step": dict(active_meta),
-                },
-            ) as step_span:
-                if trace and getattr(trace, "id", None):
-                    step_args["trace_id"] = trace.id
-                    step_args["parent_observation_id"] = getattr(step_span, "id", None)
-
-                result = await session.call_tool(
-                    tool_name=step.tool_name,
-                    arguments=step_args,
-                    step_id=step.step_id,
-                )
-                step_results.append(result)
-
-                if not result.success:
-                    logger.warning(f"Step {step.step_id} failed: {result.error}")
-                    raw_text_parts.append(f"[Step {step.step_id} - Error]: {result.error}")
-                    step_span.update(
-                        level="ERROR",
-                        status_message=result.error or "Step execution failed",
-                        output={"error": result.error},
-                    )
-                    continue
-
-                step_text = extract_step_text(result)
-                if step_text:
-                    raw_text_parts.append(step_text)
-
-                last_dataset_id, last_exported_csv = consolidate_step_metadata(
-                    result=result,
-                    consolidated_metadata=consolidated_metadata,
-                    last_dataset_id=last_dataset_id,
-                    last_exported_csv=last_exported_csv,
-                )
-                active_meta.update(consolidated_metadata)
-
-                step_span.update(
-                    output={
-                        "step_text": step_text,
-                        "structured_data": result.structured_data,
-                    },
-                    metadata={
-                        "consolidated_metadata_after_step": dict(consolidated_metadata),
-                        "last_dataset_id": last_dataset_id,
-                    },
-                )
+            step_results.append(result)
+            if step_text:
+                raw_text_parts.append(step_text)
 
         combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
 
@@ -373,17 +444,20 @@ class OrchestratorAgent:
         }
 
     async def _synthesize_response_node(self, state: OrchestratorState) -> Dict[str, Any]:
-        """
-        Node that synthesizes the final user-facing response from tool execution outputs.
-        """
+        """Synthesizes the final user-facing response from executed tool outputs and conversation context."""
         trace = _current_trace.get()
         user_query = state.get("user_query", "")
         raw_text = state.get("raw_text", "")
         metadata = state.get("metadata") or {}
+        step_results = state.get("execution_results", [])
 
-        # If a tool (like ML agent) requested user clarification, output the questions directly
-        if metadata.get("status") == "clarification_needed":
-            return {"final_response": raw_text, "metadata": metadata}
+        clarification_response = self._extract_clarification_response(
+            step_results=step_results,
+            metadata=metadata,
+            raw_text=raw_text,
+        )
+        if clarification_response:
+            return {"final_response": clarification_response, "metadata": metadata}
 
         with trace_span(
             "orchestrator.synthesize_response",
@@ -436,15 +510,15 @@ class OrchestratorAgent:
         trace_id: Optional[str] = None,
     ) -> FinalOrchestratorResult:
         """
-        Asynchronously runs Orchestrator LangGraph pipeline:
+        Asynchronously runs the Orchestrator LangGraph pipeline:
         1. Connects to MCP servers and discovers available tools.
-        2. Routes request (direct answer vs MCP tool execution) incorporating conversation history & active metadata.
-        3. Returns structured FinalOrchestratorResult with metadata.
+        2. Routes request (direct answer vs MCP tool execution) incorporating conversation history and active metadata.
+        3. Returns a structured FinalOrchestratorResult with metadata.
 
         Args:
-            user_query (str): The natural language query from user.
+            user_query (str): Natural language query from the user.
             conversation_history (Optional[List[Dict[str, str]]]): Recent messages for context.
-            active_metadata (Optional[Dict[str, Any]]): Currently active dataset/chart IDs in memory.
+            active_metadata (Optional[Dict[str, Any]]): Currently active dataset/chart IDs in session context.
             session_id (Optional[str]): Active chat session ID.
             trace_id (Optional[str]): Optional distributed trace ID.
 
@@ -478,23 +552,13 @@ class OrchestratorAgent:
                 tools = await session.list_tools()
                 logger.info(f"Discovered {len(tools)} tools via MCP: {[t.name for t in tools]}")
 
-                initial_state: OrchestratorState = {
-                    "user_query": user_query,
-                    "tools": tools,
-                    "conversation_history": conversation_history or [],
-                    "active_metadata": active_metadata or {},
-                    "is_in_scope": True,
-                    "rejection_reason": None,
-                    "requires_tools": False,
-                    "direct_response": "",
-                    "thought": "",
-                    "steps": [],
-                    "execution_results": [],
-                    "raw_text": "",
-                    "metadata": {"session_id": sess_id} if sess_id else {},
-                    "final_response": "",
-                    "error": None,
-                }
+                initial_state = self._build_initial_state(
+                    user_query=user_query,
+                    tools=tools,
+                    conversation_history=conversation_history,
+                    active_metadata=active_metadata,
+                    session_id=sess_id,
+                )
 
                 token = _current_mcp_session.set(session)
                 try:
@@ -543,27 +607,34 @@ class OrchestratorAgent:
         user_query: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         active_metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        trace_id: Optional[str] = None,
     ) -> FinalOrchestratorResult:
         """
-        Synchronous execution helper for CLI or non-async environments.
+        Synchronous execution wrapper around run() for CLI or non-async callers.
+
+        Args:
+            user_query (str): Natural language query from the user.
+            conversation_history (Optional[List[Dict[str, str]]]): Recent messages for context.
+            active_metadata (Optional[Dict[str, Any]]): Active session context metadata.
+            session_id (Optional[str]): Optional active chat session ID.
+            trace_id (Optional[str]): Optional distributed trace ID.
+
+        Returns:
+            FinalOrchestratorResult: Response containing answer, plan, and metadata.
         """
+        coro = self.run(
+            user_query,
+            conversation_history=conversation_history,
+            active_metadata=active_metadata,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
         try:
-            return asyncio.run(
-                self.run(
-                    user_query,
-                    conversation_history=conversation_history,
-                    active_metadata=active_metadata,
-                )
-            )
+            return asyncio.run(coro)
         except RuntimeError:
             loop = asyncio.get_event_loop()
-            return loop.run_until_complete(
-                self.run(
-                    user_query,
-                    conversation_history=conversation_history,
-                    active_metadata=active_metadata,
-                )
-            )
+            return loop.run_until_complete(coro)
 
     async def process_query(
         self,
@@ -574,7 +645,17 @@ class OrchestratorAgent:
         trace_id: Optional[str] = None,
     ) -> FinalOrchestratorResult:
         """
-        Async entrypoint for API routes processing queries with session-scoping.
+        Asynchronous entrypoint for API routes processing queries with session scoping.
+
+        Args:
+            query (str): Natural language query from the user.
+            history (Optional[List[Dict[str, Any]]]): Prior conversation messages.
+            active_metadata (Optional[Dict[str, Any]]): Active session metadata.
+            session_id (Optional[str]): Active chat session identifier.
+            trace_id (Optional[str]): Optional distributed trace identifier.
+
+        Returns:
+            FinalOrchestratorResult: Response containing answer, plan, and metadata.
         """
         meta = dict(active_metadata or {})
         if session_id:
@@ -596,7 +677,17 @@ class OrchestratorAgent:
         trace_id: Optional[str] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Streaming execution entrypoint yielding real-time step action updates and final result.
+        Streaming execution entrypoint yielding real-time step status updates and final result payload.
+
+        Args:
+            query (str): Natural language query from the user.
+            history (Optional[List[Dict[str, Any]]]): Prior conversation messages.
+            active_metadata (Optional[Dict[str, Any]]): Active session metadata.
+            session_id (Optional[str]): Active chat session identifier.
+            trace_id (Optional[str]): Optional distributed trace identifier.
+
+        Yields:
+            Dict[str, Any]: Streaming status events and the final result dictionary.
         """
         meta = dict(active_metadata or {})
         if session_id:
@@ -627,23 +718,13 @@ class OrchestratorAgent:
 
         async with self.mcp_manager.open_session() as session:
             tools = await session.list_tools()
-            initial_state: OrchestratorState = {
-                "user_query": query,
-                "tools": tools,
-                "conversation_history": history or [],
-                "active_metadata": meta,
-                "is_in_scope": True,
-                "rejection_reason": None,
-                "requires_tools": False,
-                "direct_response": "",
-                "thought": "",
-                "steps": [],
-                "execution_results": [],
-                "raw_text": "",
-                "metadata": {"session_id": session_id} if session_id else {},
-                "final_response": "",
-                "error": None,
-            }
+            initial_state = self._build_initial_state(
+                user_query=query,
+                tools=tools,
+                conversation_history=history,
+                active_metadata=meta,
+                session_id=session_id,
+            )
 
             token = _current_mcp_session.set(session)
             try:
@@ -712,86 +793,31 @@ class OrchestratorAgent:
                         "action": action_label,
                     }
 
-                    step_args = resolve_tool_arguments(
-                        tool_name=step.tool_name,
-                        raw_arguments=step.arguments,
-                        active_metadata=active_meta,
+                    result, step_text, last_dataset_id, last_exported_csv = await self._execute_single_step(
+                        session=session,
+                        step=step,
+                        active_meta=active_meta,
+                        consolidated_metadata=consolidated_metadata,
                         session_id=sess_id,
                         last_dataset_id=last_dataset_id,
                         last_exported_csv=last_exported_csv,
+                        trace=trace,
                     )
-
-                    with trace_span(
-                        f"orchestrator.{step.tool_name}",
-                        parent=trace,
-                        input_data={
-                            "step_id": step.step_id,
-                            "tool_name": step.tool_name,
-                            "arguments": step_args,
-                            "active_metadata_before_step": dict(active_meta),
-                        },
-                        metadata={
-                            "step_id": step.step_id,
-                            "tool_name": step.tool_name,
-                            "active_metadata_before_step": dict(active_meta),
-                        },
-                    ) as step_span:
-                        if trace and getattr(trace, "id", None):
-                            step_args["trace_id"] = trace.id
-                            step_args["parent_observation_id"] = getattr(step_span, "id", None)
-
-                        result = await session.call_tool(
-                            tool_name=step.tool_name,
-                            arguments=step_args,
-                            step_id=step.step_id,
-                        )
-                        step_results.append(result)
-
-                        if not result.success:
-                            logger.warning(f"Step {step.step_id} failed: {result.error}")
-                            raw_text_parts.append(f"[Step {step.step_id} - Error]: {result.error}")
-                            step_span.update(
-                                level="ERROR",
-                                status_message=result.error or "Step execution failed",
-                                output={"error": result.error},
-                            )
-                            continue
-
-                        step_text = extract_step_text(result)
-                        if step_text:
-                            raw_text_parts.append(step_text)
-
-                        last_dataset_id, last_exported_csv = consolidate_step_metadata(
-                            result=result,
-                            consolidated_metadata=consolidated_metadata,
-                            last_dataset_id=last_dataset_id,
-                            last_exported_csv=last_exported_csv,
-                        )
-                        active_meta.update(consolidated_metadata)
-
-                        step_span.update(
-                            output={
-                                "step_text": step_text,
-                                "structured_data": result.structured_data,
-                            },
-                            metadata={
-                                "consolidated_metadata_after_step": dict(consolidated_metadata),
-                                "last_dataset_id": last_dataset_id,
-                            },
-                        )
+                    step_results.append(result)
+                    if step_text:
+                        raw_text_parts.append(step_text)
 
                 combined_raw = "\n\n".join(raw_text_parts) if raw_text_parts else "No tools executed."
                 initial_state["execution_results"] = step_results
                 initial_state["raw_text"] = combined_raw
                 initial_state["metadata"] = consolidated_metadata
 
-                # 3. Check if clarification is needed (e.g. from modify_table or ingest_file)
-                clarification_response = None
-                for res in step_results:
-                    data = res.structured_data if isinstance(res.structured_data, dict) else {}
-                    if data.get("status") == "clarification_needed":
-                        clarification_response = data.get("response") or data.get("message")
-                        break
+                # 3. Check if clarification is needed (e.g. from modify_table or run_ml_analysis)
+                clarification_response = self._extract_clarification_response(
+                    step_results=step_results,
+                    metadata=consolidated_metadata,
+                    raw_text=combined_raw,
+                )
 
                 if clarification_response:
                     trace.update(
@@ -836,24 +862,12 @@ class OrchestratorAgent:
                 _current_trace.reset(trace_token)
 
 
-
-
 def create_orchestrator(
     settings: Optional[OrchestratorSettings] = None,
     llm: Optional[BaseLLM] = None,
     mcp_manager: Optional[MCPClientManager] = None,
 ) -> OrchestratorAgent:
-    """
-    Factory function to construct a fully configured OrchestratorAgent.
-
-    Args:
-        settings (Optional[OrchestratorSettings]): Custom OrchestratorSettings instance.
-        llm (Optional[BaseLLM]): Pre-configured LLM instance.
-        mcp_manager (Optional[MCPClientManager]): Custom MCPClientManager instance.
-
-    Returns:
-        OrchestratorAgent: Initialized orchestrator agent.
-    """
+    """Constructs and configures an OrchestratorAgent instance."""
     cfg = settings or get_orchestrator_settings()
     active_llm = llm or LLMFactory.create(
         provider=cfg.llm_provider,
@@ -869,4 +883,3 @@ def create_orchestrator(
 
 
 build_orchestrator = create_orchestrator
-

@@ -1,7 +1,3 @@
-"""
-Orchestrator metadata adapter module.
-Delegates to shared.metadata for centralized domain metadata handling across all agents.
-"""
 from typing import Any, Dict, Optional, Tuple
 
 from agents.orchestrator.models.schemas import StepExecutionResult
@@ -15,9 +11,7 @@ from shared.metadata import (
 
 
 def extract_step_text(result: StepExecutionResult) -> str:
-    """
-    Extracts readable textual output from a StepExecutionResult.
-    """
+    """Extracts readable textual output from a StepExecutionResult."""
     return extract_tool_text(result.structured_data, result.raw_content)
 
 
@@ -29,6 +23,15 @@ def consolidate_step_metadata(
 ) -> Tuple[Optional[int], Optional[str]]:
     """
     Consolidates domain metadata from StepExecutionResult into consolidated_metadata.
+
+    Args:
+        result (StepExecutionResult): Completed MCP tool step result.
+        consolidated_metadata (Dict[str, Any]): Target dictionary accumulating turn metadata.
+        last_dataset_id (Optional[int]): Most recent dataset identifier.
+        last_exported_csv (Optional[str]): Most recent exported dataset path or name.
+
+    Returns:
+        Tuple[Optional[int], Optional[str]]: Updated (last_dataset_id, last_exported_csv) tuple.
     """
     return consolidate_metadata(
         sources=(result.metadata, result.structured_data),

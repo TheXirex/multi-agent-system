@@ -1,21 +1,10 @@
-"""
-Prompt formatting utilities for the Orchestrator Agent.
-"""
 from typing import List
 
 from agents.orchestrator.models.schemas import ToolDefinition
 
 
 def format_tools_description(tools: List[ToolDefinition]) -> str:
-    """
-    Formats available MCP tools into a readable, concise YAML/schema specification for prompts.
-
-    Args:
-        tools (List[ToolDefinition]): Discovered MCP tools with schemas.
-
-    Returns:
-        str: Formatted string describing tools and their argument signatures.
-    """
+    """Formats available MCP tools into a readable schema specification for prompts."""
     if not tools:
         return "No tools currently registered."
 

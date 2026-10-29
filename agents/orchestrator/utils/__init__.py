@@ -1,6 +1,3 @@
-"""
-Orchestrator utility functions and helpers.
-"""
 from agents.orchestrator.utils.formatters import format_tools_description
 from agents.orchestrator.utils.guardrails import (
     DEFAULT_REFUSAL_MESSAGE,

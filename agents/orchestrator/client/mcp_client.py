@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from agents.orchestrator.config import MCPServerConfig
+from agents.orchestrator.config import MCPServerConfig, get_orchestrator_settings
 from agents.orchestrator.models import StepExecutionResult, ToolDefinition
 from shared.metadata import TRACKED_METADATA_KEYS
 
@@ -22,16 +22,16 @@ class MCPClientManager:
     """
 
     def __init__(self, servers: Optional[Dict[str, MCPServerConfig]] = None) -> None:
+        """Initializes the MCP client manager with default domain agent servers and optional custom servers."""
         self.server_configs: Dict[str, MCPServerConfig] = {}
-        self._tool_to_server_map: Dict[str, str] = {}
-        self._cached_tools: Dict[str, ToolDefinition] = {}
+        cfg = get_orchestrator_settings()
 
         # Register default db_agent server
         self.register_server(
             MCPServerConfig(
                 name="db_agent",
                 command=sys.executable,
-                args=["-m", "agents.db_agent.mcp_server"],
+                args=["-m", cfg.db_agent_module],
                 env=dict(os.environ),
                 enabled=True,
             )
@@ -42,34 +42,23 @@ class MCPClientManager:
             MCPServerConfig(
                 name="ml_agent",
                 command=sys.executable,
-                args=["-m", "agents.ml_agent.mcp_server"],
+                args=["-m", cfg.ml_agent_module],
                 env=dict(os.environ),
                 enabled=True,
             )
         )
 
         if servers:
-            for s_name, s_cfg in servers.items():
+            for s_cfg in servers.values():
                 self.register_server(s_cfg)
 
     def register_server(self, config: MCPServerConfig) -> None:
-        """
-        Registers an MCP server configuration.
-
-        Args:
-            config (MCPServerConfig): Server configuration details.
-        """
+        """Registers an MCP server configuration."""
         self.server_configs[config.name] = config
 
     @asynccontextmanager
     async def open_session(self) -> AsyncGenerator["ActiveMCPSession", None]:
-        """
-        Context manager that establishes active MCP sessions with all enabled servers.
-        Guarantees clean shutdown of subprocesses upon exit.
-
-        Yields:
-            ActiveMCPSession: Active session wrapper ready to list and call tools.
-        """
+        """Establishes active MCP sessions with all enabled servers and shuts them down cleanly upon exit."""
         async with AsyncExitStack() as stack:
             sessions: Dict[str, ClientSession] = {}
 
@@ -103,17 +92,13 @@ class ActiveMCPSession:
     """
 
     def __init__(self, sessions: Dict[str, ClientSession]) -> None:
+        """Initializes an active MCP session wrapper across connected server sessions."""
         self.sessions: Dict[str, ClientSession] = sessions
         self.tool_map: Dict[str, ToolDefinition] = {}
         self.tool_to_server: Dict[str, str] = {}
 
     async def discover_tools(self) -> List[ToolDefinition]:
-        """
-        Discovers tools across all active MCP server sessions.
-
-        Returns:
-            List[ToolDefinition]: Aggregated list of available tools.
-        """
+        """Discovers tools across all active MCP server sessions."""
         self.tool_map.clear()
         self.tool_to_server.clear()
 
@@ -135,23 +120,13 @@ class ActiveMCPSession:
         return list(self.tool_map.values())
 
     async def list_tools(self) -> List[ToolDefinition]:
-        """
-        Returns cached list of tools or triggers discovery.
-
-        Returns:
-            List[ToolDefinition]: List of tool definitions.
-        """
+        """Returns cached list of tools or triggers discovery."""
         if not self.tool_map:
             return await self.discover_tools()
         return list(self.tool_map.values())
 
     async def list_prompts(self) -> List[Dict[str, Any]]:
-        """
-        Discovers available prompt templates across all active MCP servers.
-
-        Returns:
-            List[Dict[str, Any]]: Aggregated list of available prompts.
-        """
+        """Discovers available prompt templates across all active MCP servers."""
         prompts = []
         for server_name, session in self.sessions.items():
             try:

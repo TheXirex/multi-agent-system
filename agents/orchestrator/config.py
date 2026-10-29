@@ -1,6 +1,6 @@
+from functools import lru_cache
 import os
 import sys
-from pathlib import Path
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -36,16 +36,11 @@ class OrchestratorSettings(BaseSettings):
     llm_model: str = os.getenv("LLM_MODEL", "gemini-3.8-flash")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
-
-    # Default configured MCP servers (db_agent included by default; extensible for future agents)
     db_agent_module: str = os.getenv("DB_AGENT_MCP_MODULE", "agents.db_agent.mcp_server")
+    ml_agent_module: str = os.getenv("ML_AGENT_MCP_MODULE", "agents.ml_agent.mcp_server")
 
 
+@lru_cache(maxsize=1)
 def get_orchestrator_settings() -> OrchestratorSettings:
-    """
-    Factory to retrieve cached orchestrator settings.
-
-    Returns:
-        OrchestratorSettings: Active settings instance.
-    """
+    """Retrieves and caches the OrchestratorSettings configuration instance."""
     return OrchestratorSettings()
