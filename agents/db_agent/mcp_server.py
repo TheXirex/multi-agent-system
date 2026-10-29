@@ -9,23 +9,13 @@ from agents.db_agent.agent import DBAgent, build_agent
 
 
 def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
-    """
-    Registers agent capabilities and tools into the provided MCP server instance.
-
-    Args:
-        server (MCPServer): Target MCP server instance.
-        agent (DBAgent): DBAgent whose tools and capabilities will be exposed.
-
-    Returns:
-        None
-    """
+    """Registers DBAgent capabilities and tools into the provided MCP server instance."""
 
     @server.tool(
         name="query_and_analyze_database",
         description=(
-            "Analyzes database content according to natural language input, generates and executes SQL query, "
-            "saves resulting table with descriptive title in database, persists SQL script in database, "
-            "and returns a structured response containing analysis text and metadata."
+            "Analyzes database content according to natural language input, generates and executes a SQL query, "
+            "persists the SQL script in the database, and returns a structured response containing analysis text and metadata."
         ),
     )
     def query_and_analyze_database(
@@ -55,7 +45,7 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
 
     @server.tool(
         name="execute_sql_to_csv",
-        description="Executes a raw SQL query statement against the database and exports results to a CSV file.",
+        description="Executes a raw SQL query statement against the database and returns execution results and preview records.",
     )
     def execute_sql_to_csv(
         query: str,
@@ -65,14 +55,29 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Executes raw SQL query and exports result to CSV.
+        Executes a raw SQL query against the session schema and returns preview records.
+
+        Args:
+            query (str): Valid SQL query statement to execute.
+            filename (Optional[str]): Optional descriptive title for the query result.
+            session_id (Optional[str]): Optional active session ID for replica routing.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Execution status, row count, columns, preview records, and metadata.
         """
         result = agent.tools.execute("execute_sql_to_csv", query=query, filename=filename, session_id=session_id)
         return {
             "status": result.get("status"),
-            "dataset_id": result.get("dataset_id"),
+            "name": result.get("name"),
+            "row_count": result.get("row_count"),
+            "columns": result.get("columns"),
+            "preview": result.get("preview"),
+            "error": result.get("error"),
             "metadata": {
-                "dataset_id": result.get("dataset_id"),
+                "table_name": result.get("name"),
+                "row_count": result.get("row_count"),
             },
         }
 
@@ -86,7 +91,15 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Retrieves formatted database schema details.
+        Retrieves formatted database schema details for the active session replica.
+
+        Args:
+            session_id (Optional[str]): Optional active session ID.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Dictionary containing table names, schema summary text, and metadata.
         """
         tables = agent.inspector.get_table_names(session_id=session_id)
         return {
@@ -113,6 +126,15 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
     ) -> Dict[str, Any]:
         """
         Modifies database tables or rows in the session database replica.
+
+        Args:
+            instruction (str): Natural language description of the requested modification.
+            session_id (Optional[str]): Optional active session ID.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Structured execution result, change ID, or clarification prompt.
         """
         return agent.modify_table(
             instruction=instruction,
@@ -135,7 +157,16 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Reverts previous database change.
+        Reverts a previous database change in the active session replica.
+
+        Args:
+            session_id (Optional[str]): Active session ID whose change history is reverted.
+            target_change_id (Optional[int]): Optional specific change history ID to revert.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Structured rollback status, reverted change ID, and response message.
         """
         return agent.rollback_change(
             session_id=session_id,
@@ -147,9 +178,9 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
     @server.tool(
         name="ingest_tabular_file",
         description=(
-            "Ingests, validates, and stores a tabular file (CSV or Excel .xlsx/.xls) into the database. "
-            "For Excel workbooks with multiple sheets, each sheet is partitioned and stored as an individual dataset. "
-            "Returns dataset IDs, column definitions, and summaries, or structured errors if the file is empty, missing, or corrupted."
+            "Ingests, validates, and stores a tabular file (CSV or Excel .xlsx/.xls) as relational tables in the database. "
+            "For Excel workbooks with multiple sheets, each sheet is partitioned and stored as an individual table. "
+            "Returns table names, column definitions, and summaries, or structured errors if the file is empty, missing, or corrupted."
         ),
     )
     def ingest_tabular_file(
@@ -160,7 +191,17 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Ingests a tabular file from disk into PostgreSQL.
+        Ingests a tabular file from disk into the session PostgreSQL schema.
+
+        Args:
+            file_path (str): Filesystem path to the CSV or Excel file.
+            dataset_name (Optional[str]): Optional custom target table name.
+            session_id (Optional[str]): Optional active session ID.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Ingestion status, created table names, column schemas, and preview records.
         """
         return agent.ingest_file(
             file_path=file_path,
@@ -172,15 +213,7 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
 
 
 def create_mcp_server(agent: Optional[DBAgent] = None) -> MCPServer:
-    """
-    Creates and configures an MCP server instance with registered db-agent tools.
-
-    Args:
-        agent (Optional[DBAgent]): Configured DBAgent instance. If None, default agent is initialized.
-
-    Returns:
-        MCPServer: Configured MCP server instance ready to serve requests.
-    """
+    """Creates and configures an MCP server instance with registered db-agent tools."""
     server = MCPServer("db-agent")
     active_agent = agent or build_agent()
     register_agent_tools(server=server, agent=active_agent)
@@ -188,15 +221,7 @@ def create_mcp_server(agent: Optional[DBAgent] = None) -> MCPServer:
 
 
 def main() -> None:
-    """
-    Main entry point for running the db-agent MCP server over standard I/O transport.
-
-    Args:
-        None
-
-    Returns:
-        None
-    """
+    """Runs the db-agent MCP server over standard I/O transport."""
     server = create_mcp_server()
     server.run(transport="stdio")
 

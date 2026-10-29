@@ -3,9 +3,7 @@ from typing import Any, Dict
 
 
 class BaseTool(ABC):
-    """
-    Abstract base class defining the contract for all agent tools.
-    """
+    """Abstract base class defining the contract for all agent tools."""
 
     name: str
     description: str
@@ -13,27 +11,11 @@ class BaseTool(ABC):
 
     @abstractmethod
     def execute(self, **kwargs: Any) -> Any:
-        """
-        Executes the tool with the provided arguments.
-
-        Args:
-            **kwargs (Any): Keyword arguments matching the tool parameter schema.
-
-        Returns:
-            Any: Result of the tool execution.
-        """
+        """Executes the tool with the provided keyword arguments."""
         pass
 
     def to_dict(self) -> Dict[str, Any]:
-        """
-        Serializes tool metadata and parameter schema to a dictionary.
-
-        Args:
-            None
-
-        Returns:
-            Dict[str, Any]: Dictionary representation of the tool.
-        """
+        """Serializes tool metadata and parameter schema to a dictionary."""
         return {
             "name": self.name,
             "description": self.description,

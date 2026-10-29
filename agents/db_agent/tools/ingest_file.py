@@ -1,5 +1,4 @@
 import io
-import json
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -8,35 +7,30 @@ import pandas as pd
 from sqlalchemy import Engine, text
 
 from agents.db_agent.tools.base import BaseTool
-from shared.db import ensure_session_replica, get_session_schema_or_public
+from shared.db import ensure_session_replica
 
 logger = logging.getLogger(__name__)
 
 
-def sanitize_table_name(name: str) -> str:
-    """
-    Sanitizes a file or sheet name into a clean, valid PostgreSQL table identifier.
-    """
-    clean = "".join(c if c.isalnum() else "_" for c in str(name).lower().strip())
+def _sanitize_pg_identifier(raw: Any, fallback: str, digit_prefix: str) -> str:
+    """Sanitizes an arbitrary string into a valid, lowercase PostgreSQL identifier (max 63 chars)."""
+    clean = "".join(c if c.isalnum() else "_" for c in str(raw).lower().strip())
     clean = "_".join(p for p in clean.split("_") if p)
     if not clean:
-        clean = "uploaded_table"
+        clean = fallback
     elif clean[0].isdigit():
-        clean = f"table_{clean}"
+        clean = f"{digit_prefix}{clean}"
     return clean[:63]
+
+
+def sanitize_table_name(name: str) -> str:
+    """Sanitizes a file or sheet name into a clean, valid PostgreSQL table identifier."""
+    return _sanitize_pg_identifier(name, fallback="uploaded_table", digit_prefix="table_")
 
 
 def sanitize_column_name(col: str) -> str:
-    """
-    Sanitizes a column header into a valid, safe PostgreSQL column identifier.
-    """
-    clean = "".join(c if c.isalnum() else "_" for c in str(col).lower().strip())
-    clean = "_".join(p for p in clean.split("_") if p)
-    if not clean:
-        clean = "col"
-    elif clean[0].isdigit():
-        clean = f"c_{clean}"
-    return clean[:63]
+    """Sanitizes a column header into a valid, safe PostgreSQL column identifier."""
+    return _sanitize_pg_identifier(col, fallback="col", digit_prefix="c_")
 
 
 class IngestTabularFileTool(BaseTool):
@@ -74,6 +68,7 @@ class IngestTabularFileTool(BaseTool):
     }
 
     def __init__(self, engine: Engine) -> None:
+        """Initializes the tabular file ingestion tool."""
         self.engine = engine
 
     def execute(
@@ -88,7 +83,20 @@ class IngestTabularFileTool(BaseTool):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        Parses CSV/Excel and creates relational tables in session schema.
+        Parses a CSV or Excel file and creates relational tables in the target session schema.
+
+        Args:
+            file_path (Optional[str]): Filesystem path to the file to ingest.
+            table_name (Optional[str]): Explicit target table name.
+            dataset_name (Optional[str]): Optional alias for target table name.
+            file_bytes (Optional[bytes]): Raw in-memory file bytes if uploaded directly.
+            filename (Optional[str]): Original filename used to infer extension and default table name.
+            overwrite (bool): Whether to overwrite an existing table if a name collision occurs.
+            session_id (Optional[str]): Active session ID for session schema isolation.
+            **kwargs (Any): Additional keyword arguments.
+
+        Returns:
+            Dict[str, Any]: Structured result with created table names, column schemas, previews, or clarification prompts.
         """
         resolved_filename = filename
         source_buffer: Optional[Union[Path, io.BytesIO]] = None
@@ -260,7 +268,7 @@ class IngestTabularFileTool(BaseTool):
                 for item_name, item_df in sheet_items:
                     target_table = sanitize_table_name(item_name)
 
-                    # Sanitize column names
+                    # Sanitize column names and ensure uniqueness
                     used_cols: set = set()
                     new_cols: List[str] = []
                     for c in item_df.columns:
@@ -332,7 +340,6 @@ class IngestTabularFileTool(BaseTool):
         primary_table = created_tables[0]["table_name"]
         all_table_names = [t["table_name"] for t in created_tables]
 
-        # Generate readable summary
         msg_lines = [
             f"📁 **File successfully uploaded and stored as a database table:** `{primary_table}`\n",
         ]

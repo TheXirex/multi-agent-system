@@ -35,6 +35,7 @@ class RollbackDatabaseChangeTool(BaseTool):
     }
 
     def __init__(self, engine: Engine) -> None:
+        """Initializes the database rollback tool."""
         self.engine = engine
 
     def execute(
@@ -46,6 +47,15 @@ class RollbackDatabaseChangeTool(BaseTool):
     ) -> Dict[str, Any]:
         """
         Rolls back the latest or specified un-reverted change in the session replica.
+
+        Args:
+            session_id (Optional[str]): Active session ID whose change history is queried.
+            change_id (Optional[int]): Specific change ID to revert.
+            target_change_id (Optional[int]): Alias for change_id.
+            **kwargs (Any): Additional keyword arguments.
+
+        Returns:
+            Dict[str, Any]: Structured result containing rollback status, message, and metadata.
         """
         effective_cid = target_change_id if target_change_id is not None else change_id
         if not session_id:
@@ -54,7 +64,7 @@ class RollbackDatabaseChangeTool(BaseTool):
                 "error": "Session ID is required to locate session change history.",
             }
 
-        target_schema = ensure_session_replica(self.engine, session_id)
+        ensure_session_replica(self.engine, session_id)
 
         # 1. Fetch target un-reverted change record
         with self.engine.begin() as conn:
@@ -85,7 +95,7 @@ class RollbackDatabaseChangeTool(BaseTool):
                     "message": "No active changes found to roll back in this session.",
                 }
 
-            rec_id, action_type, table_name, description, executed_sql, rollback_sql = (
+            rec_id, action_type, table_name, description, _, rollback_sql = (
                 row[0], row[1], row[2], row[3], row[4], row[5]
             )
 
@@ -98,7 +108,6 @@ class RollbackDatabaseChangeTool(BaseTool):
             # 2. Execute rollback statement on session schema
             try:
                 apply_session_search_path(conn, session_id)
-                # Split multiple statements if any
                 for stmt in [s.strip() for s in rollback_sql.split(";") if s.strip()]:
                     conn.execute(text(stmt))
 

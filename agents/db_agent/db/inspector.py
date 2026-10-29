@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy import Engine, inspect
 from shared.db import ensure_session_replica
 
@@ -6,26 +6,31 @@ from shared.db import ensure_session_replica
 class DatabaseInspector:
     """
     Inspects database tables, columns, and relationships to provide schema context.
-    Supports session replica schemas when session_id is provided.
+    Supports isolated session replica schemas when a session_id is provided.
     """
 
     def __init__(self, engine: Engine, schema: str = "public") -> None:
+        """Initializes the database inspector with a SQLAlchemy engine and default schema."""
         self.engine = engine
         self.schema = schema
 
     def resolve_schema(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> str:
+        """Resolves the active database schema name, provisioning a session replica if needed."""
         if schema:
             return schema
         if session_id:
             return ensure_session_replica(self.engine, session_id)
         return self.schema
 
-    def get_table_names(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> List[str]:
-        """
-        Retrieves all table and view names present in the target schema.
-        """
+    def get_table_names(
+        self,
+        session_id: Optional[str] = None,
+        schema: Optional[str] = None,
+        _inspector: Optional[Any] = None,
+    ) -> List[str]:
+        """Retrieves all table and view names present in the target schema."""
         target_schema = self.resolve_schema(session_id=session_id, schema=schema)
-        inspector = inspect(self.engine)
+        inspector = _inspector if _inspector is not None else inspect(self.engine)
         tables = inspector.get_table_names(schema=target_schema)
         try:
             views = inspector.get_view_names(schema=target_schema)
@@ -33,13 +38,27 @@ class DatabaseInspector:
             views = []
         return sorted(list(set(tables + views)))
 
+    def get_primary_key_column(
+        self,
+        table: str,
+        session_id: Optional[str] = None,
+        schema: Optional[str] = None,
+    ) -> Optional[str]:
+        """Retrieves the primary key column name for a specified table if defined."""
+        target_schema = self.resolve_schema(session_id=session_id, schema=schema)
+        try:
+            inspector = inspect(self.engine)
+            pk_constraint = inspector.get_pk_constraint(table, schema=target_schema)
+            constrained_cols = pk_constraint.get("constrained_columns", [])
+            return constrained_cols[0] if constrained_cols else None
+        except Exception:
+            return None
+
     def get_schema_summary(self, session_id: Optional[str] = None, schema: Optional[str] = None) -> str:
-        """
-        Generates a human-readable and LLM-friendly summary of the database schema.
-        """
+        """Generates a human-readable and LLM-friendly summary of the database schema."""
         target_schema = self.resolve_schema(session_id=session_id, schema=schema)
         inspector = inspect(self.engine)
-        tables = self.get_table_names(session_id=session_id, schema=target_schema)
+        tables = self.get_table_names(schema=target_schema, _inspector=inspector)
 
         if not tables:
             return "No tables found in the active database schema."

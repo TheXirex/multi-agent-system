@@ -1,3 +1,4 @@
+import contextvars
 import json
 import logging
 from typing import Any, Dict, List, Literal, Optional, TypedDict
@@ -10,7 +11,6 @@ from sqlalchemy import text
 from agents.db_agent.config import Settings, get_settings
 from agents.db_agent.db import DatabaseInspector, create_db_engine
 from agents.db_agent.prompts import prompt_loader
-from agents.db_agent.utils.schemas import SQLGenerationOutput
 from agents.db_agent.tools import (
     ExecuteSQLAndExportCSVTool,
     IngestTabularFileTool,
@@ -18,7 +18,7 @@ from agents.db_agent.tools import (
     RollbackDatabaseChangeTool,
     ToolRegistry,
 )
-import contextvars
+from agents.db_agent.utils.schemas import SQLGenerationOutput
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
 from shared.metadata import build_domain_metadata, truncate_words
@@ -66,6 +66,15 @@ class DBAgent:
         tools: ToolRegistry,
         max_retries: int = 2,
     ) -> None:
+        """
+        Initializes the database agent with an LLM provider, schema inspector, and tool registry.
+
+        Args:
+            llm (BaseLLM): Configured language model wrapper.
+            inspector (DatabaseInspector): Database schema inspector instance.
+            tools (ToolRegistry): Registry containing executable database tools.
+            max_retries (int): Maximum automatic SQL self-correction retries on execution error.
+        """
         self.llm = llm
         self.chat_model: BaseChatModel = llm.get_chat_model()
         self.inspector = inspector
@@ -153,7 +162,16 @@ class DBAgent:
         session_id: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Persists generated SQL query into PostgreSQL generated_scripts table.
+        Persists a generated SQL query into the internal.generated_scripts table.
+
+        Args:
+            script (str): Executed SQL statement text.
+            sql_description (str): Short description of the SQL query.
+            dataset_id (Optional[int]): Optional associated dataset identifier.
+            session_id (Optional[str]): Optional active session identifier.
+
+        Returns:
+            Optional[int]: Primary key ID of the saved script record, or None on failure.
         """
         if not self.inspector or not self.inspector.engine or not script:
             return None
@@ -194,7 +212,7 @@ class DBAgent:
             parent_observation_id (Optional[str]): Parent observation ID within the trace.
 
         Returns:
-            Dict[str, Any]: Structured dictionary with response and ID-only metadata.
+            Dict[str, Any]: Structured dictionary with analytical response and domain metadata.
         """
         final_state = self.run(
             user_input,
@@ -205,8 +223,8 @@ class DBAgent:
         tool_result = final_state.get("tool_result") or {}
         dataset_id = tool_result.get("dataset_id")
         sql_query = final_state.get("sql_query", "")
-        table_name = truncate_words(final_state.get("table_name", ""), max_words=5)
-        sql_description = truncate_words(final_state.get("sql_description", ""), max_words=5)
+        table_name = final_state.get("table_name", "")
+        sql_description = final_state.get("sql_description", "")
 
         script_id = None
         if sql_query:
@@ -218,6 +236,7 @@ class DBAgent:
             )
 
         all_tables = self.inspector.get_table_names(session_id=session_id)
+        all_tables_lower = {t.lower() for t in all_tables}
         queried_tables: List[str] = []
         if sql_query:
             clean_tokens = set(
@@ -232,7 +251,7 @@ class DBAgent:
             )
             queried_tables = [t for t in all_tables if t.lower() in clean_tokens]
 
-        resolved_table_names = queried_tables or ([table_name] if table_name.lower() in [t.lower() for t in all_tables] else [])
+        resolved_table_names = queried_tables or ([table_name] if table_name.lower() in all_tables_lower else [])
 
         return {
             "response": final_state.get("response", ""),
@@ -258,7 +277,19 @@ class DBAgent:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Ingests and validates tabular files (CSV, Excel) into the database.
+        Ingests and validates tabular files (CSV, Excel) into the session database replica.
+
+        Args:
+            file_path (Optional[str]): Filesystem path to the file to ingest.
+            dataset_name (Optional[str]): Optional custom target table name.
+            file_bytes (Optional[bytes]): Raw binary content if uploaded directly.
+            filename (Optional[str]): Original filename with extension.
+            session_id (Optional[str]): Active session ID for replica routing.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Ingestion status, created table names, column schemas, and preview rows.
         """
         with trace_span(
             "db_agent.ingest_tabular_file",
@@ -275,7 +306,7 @@ class DBAgent:
                 filename=filename,
                 session_id=session_id,
             )
-            span.update(output={"status": res.get("status"), "dataset_id": res.get("dataset_id")})
+            span.update(output={"status": res.get("status"), "table_name": res.get("table_name")})
             return res
 
     def modify_table(
@@ -287,6 +318,15 @@ class DBAgent:
     ) -> Dict[str, Any]:
         """
         Modifies table data or structure in the session replica database.
+
+        Args:
+            instruction (str): Natural language instruction describing the table modification.
+            session_id (Optional[str]): Active session ID for session replica routing.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Execution result containing status, executed SQL, change ID, or clarification prompts.
         """
         with trace_span(
             "db_agent.modify_database_table",
@@ -297,7 +337,12 @@ class DBAgent:
         ) as span:
             token = _current_db_trace.set(span)
             try:
-                res = self.tools.execute("modify_database_table", instruction=instruction, session_id=session_id)
+                res = self.tools.execute(
+                    "modify_database_table",
+                    instruction=instruction,
+                    session_id=session_id,
+                    parent_span=span,
+                )
                 span.update(output={"status": res.get("status")})
                 return res
             finally:
@@ -311,7 +356,16 @@ class DBAgent:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Rolls back database changes in the session replica.
+        Rolls back database changes in the session replica using recorded history.
+
+        Args:
+            session_id (Optional[str]): Active session ID whose change history is reverted.
+            target_change_id (Optional[int]): Optional specific change ID to revert.
+            trace_id (Optional[str]): Optional distributed trace ID.
+            parent_observation_id (Optional[str]): Optional parent span ID.
+
+        Returns:
+            Dict[str, Any]: Rollback status, reverted change ID, and summary response.
         """
         with trace_span(
             "db_agent.rollback_database_change",
@@ -320,20 +374,16 @@ class DBAgent:
             input_data={"session_id": session_id, "target_change_id": target_change_id},
             metadata={"session_id": session_id},
         ) as span:
-            res = self.tools.execute("rollback_database_change", session_id=session_id, target_change_id=target_change_id)
+            res = self.tools.execute(
+                "rollback_database_change",
+                session_id=session_id,
+                target_change_id=target_change_id,
+            )
             span.update(output={"status": res.get("status")})
             return res
 
     def _build_graph(self) -> Any:
-        """
-        Constructs and compiles the LangGraph StateGraph workflow for database query processing.
-
-        Args:
-            None
-
-        Returns:
-            Any: Compiled LangGraph runnable.
-        """
+        """Constructs and compiles the LangGraph StateGraph workflow for database query processing."""
         workflow = StateGraph(AgentState)
 
         workflow.add_node("inspect_schema", self._inspect_schema_node)
@@ -357,15 +407,7 @@ class DBAgent:
         return workflow.compile()
 
     def _inspect_schema_node(self, state: AgentState) -> Dict[str, Any]:
-        """
-        Graph node that fetches database schema definitions.
-
-        Args:
-            state (AgentState): Current graph state.
-
-        Returns:
-            Dict[str, Any]: State updates with retrieved schema context.
-        """
+        """Fetches database schema definitions for the active session."""
         trace = _current_db_trace.get()
         with trace_span(
             "db_agent.inspect_schema",
@@ -380,15 +422,7 @@ class DBAgent:
             return {"schema": schema_summary}
 
     def _generate_sql_node(self, state: AgentState) -> Dict[str, Any]:
-        """
-        Graph node that generates SQL query using LangChain chat model.
-
-        Args:
-            state (AgentState): Current graph state with schema and user input.
-
-        Returns:
-            Dict[str, Any]: State updates with extracted SQL query.
-        """
+        """Generates a SQL query, table title, and description using the chat model."""
         error_context = ""
         if state.get("error"):
             error_context = (
@@ -454,7 +488,10 @@ class DBAgent:
             if not table_name:
                 user_input = state.get("user_input", "")
                 req_words = "".join(c for c in user_input if c.isalnum() or c.isspace()).split()
-                table_name = truncate_words(" ".join(req_words[:5]).title() if req_words else "Query Results", max_words=5)
+                table_name = truncate_words(
+                    " ".join(req_words[:5]).title() if req_words else "Query Results",
+                    max_words=5,
+                )
             else:
                 table_name = truncate_words(table_name, max_words=5)
 
@@ -482,15 +519,7 @@ class DBAgent:
             }
 
     def _execute_sql_node(self, state: AgentState) -> Dict[str, Any]:
-        """
-        Graph node that executes generated SQL query via ExecuteSQLAndExportCSVTool.
-
-        Args:
-            state (AgentState): Current graph state with sql_query.
-
-        Returns:
-            Dict[str, Any]: State updates containing tool result and optional error.
-        """
+        """Executes the generated SQL query via ExecuteSQLAndExportCSVTool."""
         sql_query = state.get("sql_query", "")
         table_name = state.get("table_name", "Query Results")
 
@@ -527,11 +556,9 @@ class DBAgent:
                 exec_span.update(
                     output={
                         "row_count": tool_result.get("row_count"),
-                        "dataset_id": tool_result.get("dataset_id"),
                         "status": "success",
                     },
                     metadata={
-                        "dataset_id": tool_result.get("dataset_id"),
                         "row_count": tool_result.get("row_count"),
                     },
                 )
@@ -543,15 +570,7 @@ class DBAgent:
             }
 
     def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
-        """
-        Graph node that synthesizes an analytical answer based on user query and execution results.
-
-        Args:
-            state (AgentState): Current graph state with tool result and query.
-
-        Returns:
-            Dict[str, Any]: State updates with generated response text.
-        """
+        """Synthesizes an analytical answer based on user query and SQL execution results."""
         tool_result = state.get("tool_result") or {}
         preview_data = tool_result.get("preview", [])
         columns = tool_result.get("columns", [])
@@ -596,23 +615,13 @@ class DBAgent:
             return {"response": response_text}
 
     def _route_after_execution(self, state: AgentState) -> Literal["retry", "respond"]:
-        """
-        Conditional edge routing: loops back to generate_sql on error if retries remain, else proceeds to respond.
-
-        Args:
-            state (AgentState): Current graph state containing execution status and retry count.
-
-        Returns:
-            Literal["retry", "respond"]: Next graph node identifier.
-        """
+        """Routes back to generate_sql on error if retries remain, otherwise proceeds to respond."""
         if state.get("error") and state.get("retry_count", 0) <= self.max_retries:
             return "retry"
         return "respond"
 
     def _clean_sql_query(self, text: str) -> str:
-        """
-        Strips markdown code blocks, prefixes, and whitespace from model SQL output.
-        """
+        """Strips markdown code blocks, language prefixes, and surrounding whitespace from raw SQL text."""
         cleaned = text.strip()
         if "```" in cleaned:
             parts = cleaned.split("```")
@@ -629,15 +638,7 @@ class DBAgent:
 
 
 def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
-    """
-    Constructs and configures DBAgent with database connectivity, tools, and LLM.
-
-    Args:
-        settings (Optional[Settings]): Optional custom DB agent settings.
-
-    Returns:
-        DBAgent: Initialized DBAgent ready to process database requests.
-    """
+    """Constructs and configures a DBAgent instance with database connectivity, tools, and LLM."""
     cfg = settings or get_settings()
 
     engine = create_db_engine(cfg.database_url)
@@ -655,7 +656,7 @@ def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
         model_name=cfg.llm_model,
     )
 
-    modify_tool = ModifyDatabaseTableTool(engine=engine, llm=active_llm)
+    modify_tool = ModifyDatabaseTableTool(engine=engine, inspector=inspector, llm=active_llm)
     registry.register(modify_tool)
     rollback_tool = RollbackDatabaseChangeTool(engine=engine)
     registry.register(rollback_tool)
@@ -664,4 +665,3 @@ def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
 
 
 build_agent = create_db_agent
-

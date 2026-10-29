@@ -8,51 +8,68 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import Engine, text
 
 from agents.db_agent.db.inspector import DatabaseInspector
+from agents.db_agent.prompts import prompt_loader
 from agents.db_agent.tools.base import BaseTool
-from shared.db import apply_session_search_path, ensure_session_replica, get_session_schema_or_public
+from shared.db import apply_session_search_path, ensure_session_replica
 from shared.observability import trace_span
 
 logger = logging.getLogger(__name__)
 
 
+def _format_sql_literal(value: Any) -> str:
+    """Formats a Python value into a safe PostgreSQL literal representation."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("'", "''")
+    return f"'{escaped}'"
+
+
 class ModificationPlan(BaseModel):
+    """
+    Structured output schema representing a planned database table or row modification.
+    """
+
     is_ambiguous: bool = Field(
         default=False,
-        description="True ONLY if the request genuinely lacks necessary conditions, has ambiguous candidate targets, or requires user clarification before executing safely."
+        description="True when the request lacks necessary targeting conditions, has ambiguous candidate targets, or requires user clarification before executing safely.",
     )
     clarification_questions: List[str] = Field(
         default_factory=list,
-        description="Specific questions to ask user if is_ambiguous is True."
+        description="Specific questions to ask the user if is_ambiguous is True.",
     )
     clarification_message: str = Field(
         default="",
-        description="Natural language explanation of what is unclear and questions in the user's language."
+        description="Natural language explanation of what is unclear and questions in the user's language.",
     )
     action_type: Literal["insert", "update", "delete", "alter_table", "create_table", "drop_table", "unknown"] = Field(
         default="unknown",
-        description="The classified CRUD or DDL action type."
+        description="The classified CRUD or DDL action type.",
     )
     target_table: str = Field(
         default="",
-        description="Name of the table being modified or created."
+        description="Name of the table being modified or created.",
     )
     sql_statement: str = Field(
         default="",
-        description="Clean, valid PostgreSQL statement to execute the modification."
+        description="Clean, valid PostgreSQL statement to execute the modification.",
     )
     rollback_sql: Optional[str] = Field(
         default=None,
-        description="SQL statement to reverse this modification if it can be statically determined."
+        description="SQL statement to reverse this modification if it can be statically determined.",
     )
     description: str = Field(
         default="",
-        description="Concise description of the change performed."
+        description="Concise description of the change performed.",
     )
 
 
 class ModifyDatabaseTableTool(BaseTool):
     """
-    CRUD tool for db_agent: executes INSERT, UPDATE, DELETE, ALTER TABLE, CREATE TABLE,
+    CRUD and DDL tool for db_agent: executes INSERT, UPDATE, DELETE, ALTER TABLE, CREATE TABLE,
     and DROP TABLE operations on the active session's database replica.
     Validates ambiguities, asks clarifying questions if required, and records change history for undo.
     """
@@ -95,6 +112,15 @@ class ModifyDatabaseTableTool(BaseTool):
         chat_model: Optional[BaseChatModel] = None,
         llm: Optional[Any] = None,
     ) -> None:
+        """
+        Initializes the database table modification tool.
+
+        Args:
+            engine (Engine): SQLAlchemy database engine.
+            inspector (Optional[DatabaseInspector]): Optional pre-configured schema inspector.
+            chat_model (Optional[BaseChatModel]): Optional LangChain chat model instance.
+            llm (Optional[Any]): Optional BaseLLM wrapper providing get_chat_model().
+        """
         self.engine = engine
         self.inspector = inspector or DatabaseInspector(engine)
         if chat_model:
@@ -104,17 +130,57 @@ class ModifyDatabaseTableTool(BaseTool):
         else:
             self.chat_model = None
 
+    def _resolve_pk_column(
+        self,
+        schema_name: str,
+        table_name: str,
+        sample_row: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Resolves the primary key or best unique identifier column for a target table.
+
+        Args:
+            schema_name (str): Active PostgreSQL schema name.
+            table_name (str): Target table name.
+            sample_row (Optional[Dict[str, Any]]): Optional sample record dictionary to verify column presence.
+
+        Returns:
+            Optional[str]: Resolved primary key or identifier column name, or None.
+        """
+        pk_col = self.inspector.get_primary_key_column(table_name, schema=schema_name)
+        if pk_col and (sample_row is None or pk_col in sample_row):
+            return pk_col
+        if sample_row:
+            if "id" in sample_row:
+                return "id"
+            keys = list(sample_row.keys())
+            if keys:
+                return keys[0]
+        return None
+
     def execute(
         self,
         instruction: str,
         table_name: Optional[str] = None,
         action_type: Optional[str] = None,
         session_id: Optional[str] = None,
+        parent_span: Optional[Any] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
         Executes the requested database modification with ambiguity detection,
         session schema isolation, and change history recording.
+
+        Args:
+            instruction (str): Natural language instruction or SQL modification request.
+            table_name (Optional[str]): Optional target table hint.
+            action_type (Optional[str]): Optional CRUD/DDL action classification hint.
+            session_id (Optional[str]): Active session ID for session replica isolation.
+            parent_span (Optional[Any]): Optional active observability span for nested tracing.
+            **kwargs (Any): Additional keyword arguments.
+
+        Returns:
+            Dict[str, Any]: Structured execution result or clarification prompt.
         """
         clean_instruction = instruction.strip()
         if not clean_instruction:
@@ -142,6 +208,7 @@ class ModifyDatabaseTableTool(BaseTool):
             action_type=action_type,
             target_schema=target_schema,
             session_id=session_id,
+            parent_span=parent_span,
         )
 
         # 5. Handle clarification if genuinely ambiguous
@@ -206,19 +273,27 @@ class ModifyDatabaseTableTool(BaseTool):
             with self.engine.begin() as conn:
                 apply_session_search_path(conn, session_id)
 
-                # Execute modification
                 result = conn.execute(text(executed_sql))
                 rows_affected = result.rowcount if hasattr(result, "rowcount") else 0
 
-                # For INSERT, if returned row exists
+                # For INSERT, capture returned rows and build dynamic rollback statement
                 if plan.action_type == "insert" and result.returns_rows:
                     try:
                         fetched = result.fetchall()
                         after_state = [dict(r._mapping) for r in fetched]
-                        # Build rollback SQL to delete inserted IDs
-                        if after_state and "id" in after_state[0]:
-                            inserted_ids = [str(r["id"]) for r in after_state if "id" in r]
-                            rollback_sql = f'DELETE FROM "{resolved_table}" WHERE id IN ({", ".join(inserted_ids)});'
+                        if after_state:
+                            pk_col = self._resolve_pk_column(target_schema, resolved_table, after_state[0])
+                            if pk_col and pk_col in after_state[0]:
+                                formatted_ids = [
+                                    _format_sql_literal(r[pk_col])
+                                    for r in after_state
+                                    if r.get(pk_col) is not None
+                                ]
+                                if formatted_ids:
+                                    rollback_sql = (
+                                        f'DELETE FROM "{resolved_table}" '
+                                        f'WHERE "{pk_col}" IN ({", ".join(formatted_ids)});'
+                                    )
                     except Exception:
                         pass
 
@@ -297,13 +372,25 @@ class ModifyDatabaseTableTool(BaseTool):
         action_type: Optional[str],
         target_schema: str,
         session_id: Optional[str],
+        parent_span: Optional[Any] = None,
     ) -> ModificationPlan:
         """
-        Uses chat model to formulate the modification plan, classify action,
+        Uses the configured chat model to formulate the modification plan, classify the action,
         and detect genuine ambiguities.
+
+        Args:
+            instruction (str): Natural language modification request.
+            schema_summary (str): Formatted database schema summary.
+            table_name (Optional[str]): Optional target table hint.
+            action_type (Optional[str]): Optional action classification hint.
+            target_schema (str): Active PostgreSQL schema name.
+            session_id (Optional[str]): Active session ID.
+            parent_span (Optional[Any]): Optional parent observability span.
+
+        Returns:
+            ModificationPlan: Structured modification plan.
         """
         if not self.chat_model:
-            # Fallback deterministic plan
             return ModificationPlan(
                 is_ambiguous=False,
                 action_type=action_type or "unknown",
@@ -312,21 +399,10 @@ class ModifyDatabaseTableTool(BaseTool):
                 description=f"Direct SQL: {instruction}",
             )
 
-        system_prompt = (
-            "You are an expert PostgreSQL database administrator. "
-            "Your task is to analyze user requests to modify database tables (INSERT, UPDATE, DELETE rows, "
-            "ALTER TABLE, CREATE TABLE, DROP TABLE) and output an accurate, safe ModificationPlan.\n\n"
-            "Core Guidelines:\n"
-            "1. Ambiguity Detection:\n"
-            "   - Set is_ambiguous = True only when essential targeting conditions are missing (e.g. user asks to 'update price' without specifying which product or what price, or 'delete' without clear targeting criteria).\n"
-            "   - Avoid asking unnecessary questions when context allows reasonable inference (e.g. if the user says 'delete John' and there is only one users table, infer that the table is 'users').\n"
-            "   - When is_ambiguous is True, provide a concise, polite explanation in 'clarification_message' and list the questions in 'clarification_questions', rather than executing an unverified guess.\n"
-            "2. Table and Schema Rules:\n"
-            "   - Avoid modifying or targeting 'internal.*' tables (chat_sessions, chat_messages, change_history).\n"
-            "   - The user has full freedom to create any new tables they want (e.g. employees, logs, inventory).\n"
-            "   - Generate clean PostgreSQL syntax without schema prefix, as search_path is configured.\n"
-            "   - For INSERT statements, append 'RETURNING *' to capture generated values.\n"
-            f"Active Database Schema ({target_schema}):\n{schema_summary}"
+        system_prompt = prompt_loader.render(
+            "modify_table",
+            target_schema=target_schema,
+            schema_summary=schema_summary,
         )
 
         user_content = (
@@ -342,6 +418,7 @@ class ModifyDatabaseTableTool(BaseTool):
 
         with trace_span(
             "db_agent.plan_table_modification",
+            parent=parent_span,
             input_data={"instruction": instruction, "hint_table": table_name, "hint_action": action_type},
             metadata={"session_id": session_id, "target_schema": target_schema},
         ) as span:
@@ -388,8 +465,17 @@ class ModifyDatabaseTableTool(BaseTool):
         action_type: str,
     ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
         """
-        Extracts WHERE clause from UPDATE/DELETE statement, inspects target rows,
-        and verifies if genuine ambiguity exists (e.g. multiple records for a singular intent).
+        Extracts the WHERE clause from an UPDATE or DELETE statement, inspects target rows,
+        and verifies if genuine ambiguity exists (e.g. multiple records matching a singular delete intent).
+
+        Args:
+            schema_name (str): Active PostgreSQL schema name.
+            table_name (str): Target table name.
+            sql_statement (str): Planned UPDATE or DELETE SQL statement.
+            action_type (str): Classified action type ('update' or 'delete').
+
+        Returns:
+            Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]: Tuple of (captured before-state records, optional clarification error dict).
         """
         sql_lower = sql_statement.lower()
         where_idx = -1
@@ -408,13 +494,15 @@ class ModifyDatabaseTableTool(BaseTool):
         where_clause = sql_statement[where_idx + 5:].strip().rstrip(";") if where_idx != -1 else ""
 
         if not where_clause and action_type in ("update", "delete"):
-            # Deleting or updating all rows without WHERE is dangerous unless explicitly requested
             return [], {
                 "status": "clarification_needed",
                 "questions": [
-                    f"This operation will modify/delete ALL records in '{table_name}'. Are you sure you want to proceed without a WHERE condition?"
+                    f"This operation will modify or delete every record in '{table_name}'. Are you sure you want to proceed without a WHERE condition?"
                 ],
-                "response": f"Warning: This query will modify or delete ALL records in table '{table_name}'. Please specify a WHERE condition or confirm this action for all rows.",
+                "response": (
+                    f"Warning: This query will modify or delete every record in table '{table_name}'. "
+                    "Please specify a WHERE condition or explicitly confirm this action for the entire table."
+                ),
             }
 
         try:
@@ -425,7 +513,6 @@ class ModifyDatabaseTableTool(BaseTool):
 
                 # Check for multiple candidates on singular delete intent
                 if action_type == "delete" and len(records) > 1 and "limit" not in sql_statement.lower():
-                    # Check if the query looked for a specific name/text in quotes
                     target_val = "specified criterion"
                     if "=" in where_clause:
                         after_eq = where_clause.split("=", 1)[1].strip()
@@ -434,24 +521,27 @@ class ModifyDatabaseTableTool(BaseTool):
                             q2 = after_eq.find("'", q1 + 1)
                             if q2 != -1:
                                 target_val = after_eq[q1 + 1:q2]
+
+                    sample_lines: List[str] = []
+                    for rec in records[:5]:
+                        preview_pairs = [f"{k}={v}" for k, v in list(rec.items())[:3] if v is not None]
+                        sample_lines.append(f"- {', '.join(preview_pairs)}")
+
                     return [], {
                         "status": "clarification_needed",
                         "questions": [
-                            f"Found {len(records)} records matching '{target_val}'. Please provide the specific ID or unique identifier to delete."
+                            f"Found {len(records)} records matching '{target_val}'. Please provide the specific identifier to delete."
                         ],
                         "response": (
                             f"Found {len(records)} records matching '{target_val}' in table '{table_name}':\n"
-                            + "\n".join(
-                                f"- ID {r.get('id')}: {r.get('name', '')} ({r.get('email', '')})"
-                                for r in records[:5]
-                            )
-                            + "\nPlease specify the exact ID of the record you want to delete."
+                            + "\n".join(sample_lines)
+                            + "\nPlease specify the exact identifier of the record you want to delete."
                         ),
                     }
 
                 return records, None
         except Exception as exc:
-            logger.debug(f"Pre-check before state query failed or table not found: {exc}")
+            logger.debug(f"Pre-check before-state query failed or table not found: {exc}")
             return [], None
 
     def _build_dml_rollback_sql(
@@ -462,49 +552,47 @@ class ModifyDatabaseTableTool(BaseTool):
         before_state: List[Dict[str, Any]],
     ) -> Optional[str]:
         """
-        Constructs reverse SQL statements to restore rows from before_state.
+        Constructs reverse SQL statements to restore rows from captured before_state.
+
+        Args:
+            schema_name (str): Active PostgreSQL schema name.
+            table_name (str): Target table name.
+            action_type (str): DML operation type ('delete' or 'update').
+            before_state (List[Dict[str, Any]]): List of row dictionaries captured prior to execution.
+
+        Returns:
+            Optional[str]: Semicolon-delimited SQL statements to undo the DML change, or None.
         """
         if not before_state:
             return None
 
         statements: List[str] = []
         if action_type == "delete":
-            # Restore deleted rows via INSERT
             cols = list(before_state[0].keys())
             cols_str = ", ".join(f'"{c}"' for c in cols)
             for row in before_state:
-                vals = []
-                for c in cols:
-                    v = row.get(c)
-                    if v is None:
-                        vals.append("NULL")
-                    elif isinstance(v, (int, float)):
-                        vals.append(str(v))
-                    else:
-                        escaped = str(v).replace("'", "''")
-                        vals.append(f"'{escaped}'")
-                vals_str = ", ".join(vals)
+                vals_str = ", ".join(_format_sql_literal(row.get(c)) for c in cols)
                 statements.append(f'INSERT INTO "{schema_name}"."{table_name}" ({cols_str}) VALUES ({vals_str});')
 
         elif action_type == "update":
-            # Restore previous values for updated rows
+            pk_col = self._resolve_pk_column(schema_name, table_name, before_state[0])
+            if not pk_col:
+                return None
+
             for row in before_state:
-                pk_val = row.get("id")
+                pk_val = row.get(pk_col)
                 if pk_val is None:
                     continue
-                set_parts = []
-                for k, v in row.items():
-                    if k == "id":
-                        continue
-                    if v is None:
-                        set_parts.append(f'"{k}" = NULL')
-                    elif isinstance(v, (int, float)):
-                        set_parts.append(f'"{k}" = {v}')
-                    else:
-                        escaped = str(v).replace("'", "''")
-                        set_parts.append(f'"{k}" = \'{escaped}\'')
+                set_parts = [
+                    f'"{k}" = {_format_sql_literal(v)}'
+                    for k, v in row.items()
+                    if k != pk_col
+                ]
                 if set_parts:
                     set_str = ", ".join(set_parts)
-                    statements.append(f'UPDATE "{schema_name}"."{table_name}" SET {set_str} WHERE id = {pk_val};')
+                    pk_literal = _format_sql_literal(pk_val)
+                    statements.append(
+                        f'UPDATE "{schema_name}"."{table_name}" SET {set_str} WHERE "{pk_col}" = {pk_literal};'
+                    )
 
         return "\n".join(statements) if statements else None
