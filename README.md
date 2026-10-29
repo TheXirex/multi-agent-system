@@ -10,7 +10,6 @@ A modular multi-agent platform featuring shared LLM integrations and domain-spec
 - **`agents/db_agent/`**: Database agent built on **LangChain** and **LangGraph** (`StateGraph`) that inspects PostgreSQL schema, generates SQL queries, executes them, and exports results to CSV via an extensible tool registry. Exposes tools through MCP via `mcp_server.py`.
 - **`docker/postgres/init.sql`**: PostgreSQL initialization script with sample e-commerce data.
 - **`backend/`**: FastAPI backend service exposing REST endpoints for multi-agent query orchestration, session management, and dataset ingestion.
-- **`output/`**: Directory where generated CSV files are saved.
 
 ## Environment & Dependency Management (`uv`)
 
@@ -42,7 +41,7 @@ cp .env.example .env
 
 ```env
 LLM_PROVIDER=gemini
-LLM_MODEL=gemini-3.5-flash-lite
+LLM_MODEL=gemini-3.8-flash
 LLM_API_KEY=your_actual_api_key
 ```
 

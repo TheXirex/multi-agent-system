@@ -1,6 +1,4 @@
-import asyncio
 import logging
-import sys
 from typing import Any, Dict, List, Optional
 
 try:
@@ -14,21 +12,15 @@ logger = logging.getLogger(__name__)
 
 
 def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
-    """
-    Registers ML Agent tools into the provided MCP server instance.
-
-    Args:
-        server (MCPServer): Target MCP server instance.
-        agent (MLAgent): MLAgent instance providing execution capabilities.
-    """
+    """Registers ML Agent tools into the provided MCP server instance."""
 
     @server.tool(
         name="run_ml_analysis",
         description=(
             "Performs machine learning modeling, predictive analytics, statistical analysis, "
-            "or data visualization on given in-memory dataset(s) (specified via dataset_id, dataset_ids, or dataset_path). "
+            "or data visualization on given in-memory dataset(s) or database table(s). "
             "Formulates Python code using in-memory data copies (e.g. df = data.copy()), executes it in an isolated ML environment, "
-            "repairs runtime errors automatically, persists interactive Plotly charts and scripts in database, "
+            "repairs runtime errors automatically, persists interactive Plotly charts and scripts in the database, "
             "and returns analytical findings with ID-only metadata."
         ),
     )
@@ -44,7 +36,7 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
         parent_observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Executes ML task on the given dataset(s) or database table(s).
+        Executes an ML or visualization task on the given dataset(s) or database table(s).
 
         Args:
             task_description (str): Natural language description of the analytical or ML task.
@@ -73,19 +65,21 @@ def register_agent_tools(server: MCPServer, agent: MLAgent) -> None:
         )
 
 
-
 def create_ml_mcp_server(agent: Optional[MLAgent] = None) -> MCPServer:
-    """
-    Creates and initializes the MCP server exposing ML Agent tools.
-    """
+    """Creates and initializes the MCP server exposing ML Agent tools."""
     server = MCPServer("ml_agent")
     active_agent = agent or build_ml_agent()
     register_agent_tools(server, active_agent)
     return server
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Runs the ml_agent MCP server over standard I/O transport."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     logger.info("Starting ML Agent MCP Server...")
     mcp_app = create_ml_mcp_server()
     mcp_app.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

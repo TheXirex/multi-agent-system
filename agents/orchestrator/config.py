@@ -33,7 +33,7 @@ class OrchestratorSettings(BaseSettings):
     )
 
     llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")
-    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.8-flash")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
 

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+import contextvars
 import json
 import logging
 from pathlib import Path
@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
 
 import pandas as pd
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import Engine, text
 
@@ -16,8 +16,7 @@ from agents.db_agent.db import create_db_engine
 from agents.ml_agent.config import MLAgentSettings, get_ml_settings
 from agents.ml_agent.prompts import prompt_loader
 from agents.ml_agent.runner import MLCodeRunner
-from agents.ml_agent.utils.schemas import ClarityQuestion, MLCodeGenerationOutput, TaskClarityOutput
-import contextvars
+from agents.ml_agent.utils.schemas import MLCodeGenerationOutput, TaskClarityOutput
 from shared.db import apply_session_search_path, get_session_schema_or_public
 from shared.llm.base import BaseLLM, extract_text_from_message_content
 from shared.llm.factory import LLMFactory
@@ -65,6 +64,7 @@ class MLAgentState(TypedDict):
 
 
 def _is_color_title(val: Any) -> bool:
+    """Checks whether a legend or colorbar title is a redundant generic 'color' label."""
     if not isinstance(val, str):
         return False
     s = val.strip().lower()
@@ -75,13 +75,23 @@ def _is_color_title(val: Any) -> bool:
     return s in ("color", "colour", "color:", "colour:")
 
 
+def _clear_color_title_field(container: Dict[str, Any], key: str) -> None:
+    """Clears a title field inside a dictionary if it contains a generic 'color' label."""
+    field_val = container.get(key)
+    if isinstance(field_val, dict):
+        if _is_color_title(field_val.get("text")):
+            field_val["text"] = ""
+    elif _is_color_title(field_val):
+        container[key] = ""
+
+
 def _clean_chart_spec(spec: Dict[str, Any]) -> None:
+    """Sanitizes a Plotly figure specification in-place by removing duplicate titles and generic 'color' labels."""
     if not isinstance(spec, dict):
         return
 
     layout = spec.get("layout")
     if isinstance(layout, dict):
-        # Clear title inside the Plotly canvas so it is rendered in the external card header only
         if "title" in layout:
             if isinstance(layout["title"], dict):
                 layout["title"]["text"] = ""
@@ -90,22 +100,10 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
 
         legend = layout.get("legend")
         if isinstance(legend, dict):
-            lt = legend.get("title")
-            if isinstance(lt, dict):
-                if _is_color_title(lt.get("text")):
-                    lt["text"] = ""
-            elif _is_color_title(lt):
-                legend["title"] = ""
+            _clear_color_title_field(legend, "title")
 
-        if _is_color_title(layout.get("legend_title_text")):
-            layout["legend_title_text"] = ""
-
-        legend_title = layout.get("legend_title")
-        if isinstance(legend_title, dict):
-            if _is_color_title(legend_title.get("text")):
-                legend_title["text"] = ""
-        elif _is_color_title(legend_title):
-            layout["legend_title"] = ""
+        _clear_color_title_field(layout, "legend_title_text")
+        _clear_color_title_field(layout, "legend_title")
 
         template = layout.get("template")
         if isinstance(template, dict):
@@ -113,13 +111,8 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
             if isinstance(t_layout, dict):
                 t_legend = t_layout.get("legend")
                 if isinstance(t_legend, dict):
-                    t_lt = t_legend.get("title")
-                    if isinstance(t_lt, dict) and _is_color_title(t_lt.get("text")):
-                        t_lt["text"] = ""
-                    elif _is_color_title(t_lt):
-                        t_legend["title"] = ""
-                if _is_color_title(t_layout.get("legend_title_text")):
-                    t_layout["legend_title_text"] = ""
+                    _clear_color_title_field(t_legend, "title")
+                _clear_color_title_field(t_layout, "legend_title_text")
 
     data = spec.get("data")
     if isinstance(data, list):
@@ -129,11 +122,7 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
                 if isinstance(marker, dict):
                     colorbar = marker.get("colorbar")
                     if isinstance(colorbar, dict):
-                        cb_title = colorbar.get("title")
-                        if isinstance(cb_title, dict) and _is_color_title(cb_title.get("text")):
-                            cb_title["text"] = ""
-                        elif _is_color_title(cb_title):
-                            colorbar["title"] = ""
+                        _clear_color_title_field(colorbar, "title")
 
 
 class MLAgent:
@@ -148,22 +137,27 @@ class MLAgent:
         self,
         llm: BaseLLM,
         runner: MLCodeRunner,
-        output_dir: Path,
         max_retries: int = 3,
         engine: Optional[Engine] = None,
     ) -> None:
+        """
+        Initializes the Machine Learning Agent.
+
+        Args:
+            llm (BaseLLM): Configured language model wrapper.
+            runner (MLCodeRunner): Subprocess execution sandbox runner.
+            max_retries (int): Maximum self-healing code repair attempts.
+            engine (Optional[Engine]): Optional SQLAlchemy database engine for loading tables and persisting artifacts.
+        """
         self.llm = llm
         self.chat_model: BaseChatModel = llm.get_chat_model()
         self.runner = runner
-        self.output_dir = output_dir.resolve()
         self.max_retries = max_retries
         self.engine = engine
         self.graph = self._build_graph()
 
     def _build_graph(self) -> Any:
-        """
-        Constructs and compiles the StateGraph for ML task formulation and execution.
-        """
+        """Constructs and compiles the StateGraph for ML task formulation and execution."""
         workflow = StateGraph(MLAgentState)
 
         workflow.add_node("prepare_dataset", self._prepare_dataset_node)
@@ -198,9 +192,7 @@ class MLAgent:
         return workflow.compile()
 
     def _extract_python_code(self, raw_text: str) -> str:
-        """
-        Extracts executable Python code from markdown code blocks or raw response.
-        """
+        """Extracts executable Python code from markdown code blocks or raw LLM output."""
         cleaned = raw_text.strip()
         if "```" in cleaned:
             parts = cleaned.split("```")
@@ -216,9 +208,7 @@ class MLAgent:
         return cleaned
 
     def _clean_identifier(self, name: str) -> str:
-        """
-        Transforms dataset or sheet name into a clean Python variable identifier.
-        """
+        """Transforms a dataset or sheet name into a clean Python variable identifier."""
         cleaned = "".join(c if (c.isalnum() or c == "_") else "_" for c in name.lower()).strip("_")
         if not cleaned or cleaned[0].isdigit():
             cleaned = f"ds_{cleaned}"
@@ -234,9 +224,21 @@ class MLAgent:
         **kwargs: Any,
     ) -> Tuple[Dict[str, pd.DataFrame], Optional[int], List[int], Optional[str]]:
         """
-        Loads dataset records directly into memory as pandas DataFrames without writing CSVs to disk.
-        Supports single and multiple datasets, scoped strictly to the given session_id when provided.
-        Prioritizes querying the actual relational SQL table in the session schema.
+        Loads dataset records directly into memory as pandas DataFrames.
+        Prioritizes querying the specified relational SQL table(s) in the active session schema,
+        falling back to a local file path or all base tables in the target schema.
+
+        Args:
+            given_path (Optional[str]): Optional path to a CSV or Excel file on disk.
+            given_id (Optional[int]): Optional legacy dataset ID.
+            given_ids (Optional[List[int]]): Optional list of legacy dataset IDs.
+            table_names (Optional[Any]): Table name or list of table names to load.
+            session_id (Optional[str]): Active session ID for session schema resolution.
+            **kwargs (Any): Additional keyword arguments.
+
+        Returns:
+            Tuple[Dict[str, pd.DataFrame], Optional[int], List[int], Optional[str]]:
+                Mapping of variable names to DataFrames, primary dataset ID, all dataset IDs, and executed SQL string.
         """
         loaded_dfs: Dict[str, pd.DataFrame] = {}
         executed_sql: Optional[str] = None
@@ -266,7 +268,7 @@ class MLAgent:
             except Exception as ex:
                 logger.warning(f"Failed to load table(s) {resolved_tables} from schema '{target_schema}': {ex}")
 
-        # If not resolved by ID or table_name, try given_path
+        # 2. If not resolved by table_name, try given_path
         if not loaded_dfs and given_path:
             p = Path(given_path)
             if p.is_file():
@@ -284,16 +286,20 @@ class MLAgent:
                 except Exception as ex:
                     logger.warning(f"Failed to read dataset from path '{given_path}': {ex}")
 
-        # If still empty, query tables present in the target session schema
-        if not loaded_dfs and self.engine and session_id:
+        # 3. If still empty, query base tables present in the target schema (session or public)
+        if not loaded_dfs and self.engine:
+            target_schema = get_session_schema_or_public(session_id)
             try:
-                target_schema = get_session_schema_or_public(session_id)
                 with self.engine.connect() as conn:
                     apply_session_search_path(conn, session_id)
                     schema_tables = [
                         r[0]
                         for r in conn.execute(
-                            text("SELECT table_name FROM information_schema.tables WHERE table_schema = :s AND table_type = 'BASE TABLE' ORDER BY table_name ASC"),
+                            text(
+                                "SELECT table_name FROM information_schema.tables "
+                                "WHERE table_schema = :s AND table_type = 'BASE TABLE' "
+                                "ORDER BY table_name ASC"
+                            ),
                             {"s": target_schema},
                         ).fetchall()
                     ]
@@ -309,14 +315,11 @@ class MLAgent:
             except Exception as ex:
                 logger.debug(f"Could not load tables from schema '{target_schema}': {ex}")
 
-        actual_ids: List[int] = []
-        primary_id = None
-        return loaded_dfs, primary_id, actual_ids, executed_sql
+        actual_ids: List[int] = list(given_ids) if given_ids else ([] if given_id is None else [given_id])
+        return loaded_dfs, given_id, actual_ids, executed_sql
 
     async def _prepare_dataset_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Loads schema, feature types, and data preview for in-memory datasets.
-        """
+        """Loads schema, feature types, and data preview for in-memory datasets."""
         trace = _current_ml_trace.get()
         given_path = state.get("dataset_path", "")
         given_id = state.get("dataset_id")
@@ -346,7 +349,7 @@ class MLAgent:
             if not loaded_dfs:
                 loaded_dfs = {"data": pd.DataFrame()}
 
-            # Distinguish unique DataFrames
+            # Distinguish unique DataFrames by object identity
             unique_dfs: List[Tuple[str, pd.DataFrame]] = []
             seen_ids = set()
             for k, v in loaded_dfs.items():
@@ -356,11 +359,11 @@ class MLAgent:
                     unique_dfs.append((k, v))
 
             is_multi = len(unique_dfs) > 1
-            preview_sections = []
-            copy_stmts = []
+            preview_sections: List[str] = []
+            copy_stmts: List[str] = []
 
             if not is_multi:
-                var_name, df = unique_dfs[0]
+                _, df = unique_dfs[0]
                 loaded_dfs["data"] = df
                 copy_stmts.append("df = data.copy()")
                 preview_sections.append(f"In-memory DataFrame: `data`\nShape: {df.shape[0]} rows, {df.shape[1]} columns")
@@ -386,7 +389,6 @@ class MLAgent:
                     preview_sections.append(df.head(2).to_string())
                     preview_sections.append("")
 
-                # Set 'data' as alias to first dataset for safety
                 loaded_dfs["data"] = unique_dfs[0][1]
 
             prep_span.update(
@@ -413,9 +415,7 @@ class MLAgent:
             }
 
     async def _check_clarity_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Evaluates if the user's task description is clear or if specific clarification is needed.
-        """
+        """Evaluates if the user's task description is clear enough to proceed or if clarification is required."""
         trace = _current_ml_trace.get()
         task_desc = state.get("task_description", "")
         dataset_preview = state.get("dataset_preview", "")
@@ -465,8 +465,7 @@ class MLAgent:
                     logger.error(f"Fallback clarity check failed: {fb_err}")
 
             if needs_clarification and questions:
-                # Clarification is an extreme last resort: ONLY ask when NEITHER the data is understandable
-                # NOR the approach to use is understandable.
+                # Clarification is reserved as a last resort when neither the data nor the approach can be inferred.
                 in_memory_dfs = state.get("in_memory_datasets", {})
                 has_usable_data = any(
                     isinstance(df, pd.DataFrame) and not df.empty and len(df.columns) > 0
@@ -478,13 +477,12 @@ class MLAgent:
                     "regress", "classif", "predict", "train", "model", "cluster",
                     "segment", "forecast", "detect", "score", "churn", "spend",
                     "price", "sales", "revenue", "order", "distribut", "correlat",
-                    "trend", "scatter", "pca", "anomaly", "rfm", "customer"
+                    "trend", "scatter", "pca", "anomaly", "rfm", "customer",
                 ]
                 has_clear_approach = any(kw in task_lower for kw in approach_keywords)
                 has_recommendations = any(bool(q.get("recommended")) for q in questions)
 
-                # If the data is usable or the approach/task is specified, do NOT block the user.
-                # Auto-adopt recommended settings or default domain best practices and proceed.
+                # When data is usable or the approach is specified, auto-adopt recommended settings and proceed.
                 if (has_usable_data or has_clear_approach) and (has_clear_approach or has_recommendations):
                     rec_instructions = [
                         f"{q.get('question', '')} -> Use recommended: {q.get('recommended')}"
@@ -517,7 +515,6 @@ class MLAgent:
                         "task_description": updated_task_desc,
                     }
 
-                # Only if BOTH data and approach are truly missing/unintelligible do we prompt the user:
                 lines = [
                     "### Clarification Needed Before Training ML Model\n",
                     "To build the most accurate and suitable model, please clarify the following questions or pick from the recommended options:\n",
@@ -553,17 +550,13 @@ class MLAgent:
             }
 
     def _route_after_clarity(self, state: MLAgentState) -> Literal["clarify", "proceed"]:
-        """
-        Routes to end if clarification is required, otherwise continues to code generation.
-        """
+        """Routes to END if user clarification is required, otherwise proceeds to code generation."""
         if state.get("needs_clarification"):
             return "clarify"
         return "proceed"
 
     async def _generate_code_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Generates Python machine learning code and a concise title (4-5 words max) tailored to the user's task.
-        """
+        """Generates Python machine learning code and a concise title tailored to the user's task."""
         trace = _current_ml_trace.get()
         task_desc = state.get("task_description", "")
         with trace_span(
@@ -615,7 +608,10 @@ class MLAgent:
 
             if not code_title:
                 task_words = "".join(c for c in task_desc if c.isalnum() or c.isspace()).split()
-                code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
+                code_title = truncate_words(
+                    " ".join(task_words[:5]).title() if task_words else "Machine Learning Script",
+                    max_words=5,
+                )
             else:
                 code_title = truncate_words(code_title, max_words=5)
 
@@ -638,9 +634,7 @@ class MLAgent:
             }
 
     async def _execute_code_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Executes current code in the isolated subprocess runner with in-memory datasets.
-        """
+        """Executes current Python code in the isolated subprocess runner with in-memory datasets."""
         trace = _current_ml_trace.get()
         code = state.get("current_code", "")
         in_memory_dfs = state.get("in_memory_datasets", {})
@@ -674,7 +668,6 @@ class MLAgent:
                         "success": True,
                         "stdout_length": len(res.get("stdout", "")),
                         "charts_count": len(res.get("charts", [])),
-                        "plots_count": len(res.get("plots", [])),
                     },
                 )
 
@@ -686,17 +679,13 @@ class MLAgent:
             }
 
     def _route_after_execution(self, state: MLAgentState) -> Literal["repair", "summarize"]:
-        """
-        Routes to repair loop if execution failed and retries remain, else proceeds to summarize.
-        """
+        """Routes to the self-healing repair node if execution failed and retries remain, otherwise summarizes."""
         if not state.get("success") and state.get("retry_count", 0) < self.max_retries:
             return "repair"
         return "summarize"
 
     async def _repair_code_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Self-healing node: debugs and repairs code based on execution traceback.
-        """
+        """Debugs and repairs Python code based on the execution traceback."""
         trace = _current_ml_trace.get()
         current_retries = state.get("retry_count", 0) + 1
         logger.info(f"MLAgent self-healing repair attempt {current_retries}/{self.max_retries}")
@@ -750,9 +739,7 @@ class MLAgent:
             }
 
     async def _summarize_results_node(self, state: MLAgentState) -> Dict[str, Any]:
-        """
-        Synthesizes final analytical summary from code output and generated Plotly charts.
-        """
+        """Synthesizes the final analytical summary from console output and generated Plotly charts."""
         trace = _current_ml_trace.get()
         exec_res = state.get("execution_result", {})
         stdout = exec_res.get("stdout", "")
@@ -766,7 +753,6 @@ class MLAgent:
             input_data={
                 "success": success,
                 "charts_count": len(charts),
-                "plots_count": len(plots),
             },
             metadata={
                 "success": success,
@@ -818,7 +804,15 @@ class MLAgent:
         session_id: Optional[str] = None,
     ) -> List[int]:
         """
-        Persists generated Plotly chart JSON specifications into PostgreSQL generated_charts.
+        Persists generated Plotly chart JSON specifications into internal.generated_charts.
+
+        Args:
+            charts (List[Dict[str, Any]]): List of chart objects containing file_name and spec.
+            dataset_id (Optional[int]): Optional associated dataset ID.
+            session_id (Optional[str]): Active session ID.
+
+        Returns:
+            List[int]: Primary key IDs of the saved chart records.
         """
         if not self.engine or not charts:
             return []
@@ -842,7 +836,11 @@ class MLAgent:
 
             if not title:
                 raw_title = ch.get("file_name", "Plotly Chart").replace(".json", "").replace("_", " ")
-                clean_tokens = [t for t in raw_title.split() if not (t.isdigit() or len(t) >= 6 and t.isalnum() and any(c.isdigit() for c in t))]
+                clean_tokens = [
+                    t
+                    for t in raw_title.split()
+                    if not (t.isdigit() or len(t) >= 6 and t.isalnum() and any(c.isdigit() for c in t))
+                ]
                 clean_title = " ".join(clean_tokens) if clean_tokens else raw_title
                 title = truncate_words(clean_title.title() if clean_title else "Plotly Chart", max_words=5)
 
@@ -884,7 +882,16 @@ class MLAgent:
         session_id: Optional[str] = None,
     ) -> Optional[int]:
         """
-        Persists generated ML Python code into PostgreSQL internal.generated_scripts.
+        Persists generated ML Python code into internal.generated_scripts.
+
+        Args:
+            script (str): Executed Python code string.
+            task_description (str): Short descriptive title for the script.
+            dataset_id (Optional[int]): Optional associated dataset ID.
+            session_id (Optional[str]): Active session ID.
+
+        Returns:
+            Optional[int]: Primary key ID of the saved script record, or None on failure.
         """
         if not self.engine or not script.strip():
             return None
@@ -909,31 +916,6 @@ class MLAgent:
             logger.error(f"Error saving script to database: {ex}", exc_info=True)
             return None
 
-    def _cleanup_intermediate_files(self) -> None:
-        """
-        Deletes all intermediate files (CSVs, JSON chart specs, python scripts, plots)
-        from disk immediately once intermediate execution stages are complete, ensuring
-        no traces remain in the local filesystem.
-        """
-        try:
-            if self.output_dir.exists():
-                for p in self.output_dir.iterdir():
-                    if p.is_file():
-                        try:
-                            p.unlink(missing_ok=True)
-                        except Exception as ex:
-                            logger.debug(f"Could not delete temp file {p.name}: {ex}")
-            scripts_dir = self.output_dir / "ml_scripts"
-            if scripts_dir.exists():
-                for p in scripts_dir.iterdir():
-                    if p.is_file():
-                        try:
-                            p.unlink(missing_ok=True)
-                        except Exception as ex:
-                            logger.debug(f"Could not delete script file {p.name}: {ex}")
-        except Exception as ex:
-            logger.debug(f"Error during intermediate file cleanup: {ex}")
-
     async def run(
         self,
         task_description: str,
@@ -947,18 +929,19 @@ class MLAgent:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        Runs the full end-to-end ML Agent workflow asynchronously, returning response
-        and ID-only metadata. Cleans up all intermediate files from disk once finished.
+        Runs the full end-to-end ML Agent workflow asynchronously, returning the analytical response
+        and ID-only metadata.
 
         Args:
             task_description (str): Natural language task requirement.
-            dataset_path (Optional[str]): Path to CSV dataset file.
-            dataset_id (Optional[int]): Database identifier of the dataset.
+            dataset_path (Optional[str]): Optional path to CSV or Excel dataset file.
+            dataset_id (Optional[int]): Optional database identifier of the primary dataset.
             dataset_ids (Optional[List[int]]): Optional list of multiple dataset identifiers.
-            table_names (Optional[Union[List[str], str]]): Relational database table name or list of table names.
+            table_names (Optional[Any]): Relational database table name or list of table names.
             session_id (Optional[str]): Optional session ID to bind and scope the analysis.
             trace_id (Optional[str]): Distributed trace ID to bind execution.
             parent_observation_id (Optional[str]): Parent observation ID within the trace.
+            **kwargs (Any): Additional keyword arguments (such as sql_query or table_name).
 
         Returns:
             Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
@@ -1066,7 +1049,10 @@ class MLAgent:
             code_title = final_state.get("code_title")
             if not code_title:
                 task_words = "".join(c for c in task_description if c.isalnum() or c.isspace()).split()
-                code_title = truncate_words(" ".join(task_words[:5]).title() if task_words else "Machine Learning Script", max_words=5)
+                code_title = truncate_words(
+                    " ".join(task_words[:5]).title() if task_words else "Machine Learning Script",
+                    max_words=5,
+                )
             else:
                 code_title = truncate_words(code_title, max_words=5)
 
@@ -1104,7 +1090,6 @@ class MLAgent:
             _current_ml_trace.reset(trace_token)
             if parent_scope is not None:
                 parent_scope.__exit__(None, None, None)
-            self._cleanup_intermediate_files()
 
     def run_sync(
         self,
@@ -1117,43 +1102,43 @@ class MLAgent:
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
-        Synchronous execution helper.
+        Synchronous execution wrapper around run().
+
+        Args:
+            task_description (str): Natural language task requirement.
+            dataset_path (Optional[str]): Optional path to CSV dataset file.
+            dataset_id (Optional[int]): Optional database identifier of the dataset.
+            dataset_ids (Optional[List[int]]): Optional list of multiple dataset identifiers.
+            table_names (Optional[Any]): Relational database table name or list of table names.
+            session_id (Optional[str]): Optional session ID to bind and scope the analysis.
+            **kwargs (Any): Additional keyword arguments passed to run().
+
+        Returns:
+            Dict[str, Any]: Structured dictionary with response text and ID-only metadata.
         """
+        coro = self.run(
+            task_description=task_description,
+            dataset_path=dataset_path,
+            dataset_id=dataset_id,
+            dataset_ids=dataset_ids,
+            table_names=table_names,
+            session_id=session_id,
+            **kwargs,
+        )
         try:
-            return asyncio.run(
-                self.run(
-                    task_description=task_description,
-                    dataset_path=dataset_path,
-                    dataset_id=dataset_id,
-                    dataset_ids=dataset_ids,
-                    table_names=table_names,
-                    session_id=session_id,
-                    **kwargs,
-                )
-            )
+            return asyncio.run(coro)
         except RuntimeError:
             loop = asyncio.get_event_loop()
-            return loop.run_until_complete(
-                self.run(
-                    task_description=task_description,
-                    dataset_path=dataset_path,
-                    dataset_id=dataset_id,
-                    dataset_ids=dataset_ids,
-                    session_id=session_id,
-                )
-            )
+            return loop.run_until_complete(coro)
 
 
 def create_ml_agent(settings: Optional[MLAgentSettings] = None, engine: Optional[Engine] = None) -> MLAgent:
-    """
-    Factory function to construct and configure a fully functional MLAgent.
-    """
+    """Constructs and configures a fully functional MLAgent instance."""
     cfg = settings or get_ml_settings()
     python_bin = cfg.resolve_python_executable()
 
     runner = MLCodeRunner(
         python_bin=python_bin,
-        output_dir=cfg.output_dir,
         timeout_seconds=cfg.execution_timeout_seconds,
     )
 
@@ -1174,7 +1159,6 @@ def create_ml_agent(settings: Optional[MLAgentSettings] = None, engine: Optional
     return MLAgent(
         llm=active_llm,
         runner=runner,
-        output_dir=cfg.output_dir,
         max_retries=cfg.max_retries,
         engine=db_engine,
     )

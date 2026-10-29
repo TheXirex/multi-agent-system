@@ -1,17 +1,15 @@
 import asyncio
 import base64
-from datetime import datetime
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+import tempfile
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 logger = logging.getLogger(__name__)
-
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
 
 
 class MLCodeRunner:
@@ -24,40 +22,35 @@ class MLCodeRunner:
     def __init__(
         self,
         python_bin: str,
-        output_dir: Path,
         timeout_seconds: int = 90,
     ) -> None:
+        """Initializes the ML subprocess code runner."""
         self.python_bin = python_bin
-        self.output_dir = output_dir.resolve()
-        self.scripts_dir = self.output_dir / "ml_scripts"
         self.timeout_seconds = timeout_seconds
 
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.scripts_dir.mkdir(parents=True, exist_ok=True)
+    def _collect_json_charts(self, directory: Path) -> List[Dict[str, Any]]:
+        """Reads and validates all Plotly JSON chart specifications generated in the target directory."""
+        if not directory.exists():
+            return []
 
-    def _snapshot_images(self) -> Set[Path]:
-        """
-        Takes a snapshot of existing image files in the output directory.
-        """
-        if not self.output_dir.exists():
-            return set()
-        return {
-            p
-            for p in self.output_dir.iterdir()
-            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-        }
+        json_files = sorted(
+            (p for p in directory.iterdir() if p.is_file() and p.suffix.lower() == ".json"),
+            key=lambda p: p.stat().st_mtime,
+        )
 
-    def _snapshot_json_files(self) -> Dict[Path, float]:
-        """
-        Takes a snapshot of existing JSON files and their modification times in the output directory.
-        """
-        if not self.output_dir.exists():
-            return {}
-        return {
-            p: p.stat().st_mtime
-            for p in self.output_dir.iterdir()
-            if p.is_file() and p.suffix.lower() == ".json"
-        }
+        charts: List[Dict[str, Any]] = []
+        for jp in json_files:
+            try:
+                spec_content = json.loads(jp.read_text(encoding="utf-8"))
+                if isinstance(spec_content, dict) and ("data" in spec_content or "layout" in spec_content):
+                    charts.append({
+                        "file_name": jp.name,
+                        "spec": spec_content,
+                    })
+            except Exception as ex:
+                logger.warning(f"Could not parse chart JSON from {jp.name}: {ex}")
+
+        return charts
 
     async def run_code(
         self,
@@ -65,24 +58,21 @@ class MLCodeRunner:
         in_memory_datasets: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
-        Executes Python code in a subprocess, capturing output, errors, and new chart artifacts.
-        Pre-loads in-memory datasets into the Python process so scripts can directly copy them.
-        Removes all temporary script files from disk upon completion.
+        Executes Python code in an ephemeral system temporary directory, capturing output, errors,
+        and generated Plotly chart artifacts. Deduplicates in-memory DataFrame aliases during
+        bootstrap serialization and automatically cleans up the temporary directory upon exit.
 
         Args:
             code (str): Python script to execute.
-            in_memory_datasets (Optional[Dict[str, Any]]): Mapping of variable names to DataFrames/records.
+            in_memory_datasets (Optional[Dict[str, Any]]): Mapping of variable names to DataFrames or records.
 
         Returns:
-            Dict[str, Any]: Execution status, stdout, stderr, clean code, charts, and plots.
+            Dict[str, Any]: Execution status, returncode, stdout, stderr, clean code, and collected charts.
         """
         clean_code = code.strip()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        start_time = datetime.now().timestamp()
-        script_file = self.scripts_dir / f"ml_run_{timestamp}.py"
 
-        # Build in-memory dataset injection preamble if provided
-        executable_script_parts = []
+        # Build in-memory dataset injection preamble with alias deduplication
+        executable_script_parts: List[str] = []
         if in_memory_datasets:
             bootstrap_lines = [
                 "# --- SYSTEM IN-MEMORY DATASET INJECTION ---",
@@ -90,11 +80,17 @@ class MLCodeRunner:
                 "import json",
                 "import pandas as pd",
             ]
+            serialized_df_ids: Dict[int, str] = {}
+
             for var_name, data_val in in_memory_datasets.items():
+                obj_id = id(data_val)
+                if obj_id in serialized_df_ids:
+                    source_var = serialized_df_ids[obj_id]
+                    bootstrap_lines.append(f"{var_name} = {source_var}")
+                    continue
+
                 if isinstance(data_val, pd.DataFrame):
                     raw_json = data_val.to_json(orient="records", date_format="iso")
-                elif isinstance(data_val, list):
-                    raw_json = json.dumps(data_val, default=str)
                 elif isinstance(data_val, str):
                     raw_json = data_val
                 else:
@@ -104,119 +100,89 @@ class MLCodeRunner:
                 bootstrap_lines.append(
                     f"{var_name} = pd.DataFrame(json.loads(base64.b64decode(b'{b64_str}').decode('utf-8')))"
                 )
+                serialized_df_ids[obj_id] = var_name
+
             bootstrap_lines.append("# --- END IN-MEMORY INJECTION ---\n")
             executable_script_parts.append("\n".join(bootstrap_lines))
 
         executable_script_parts.append(clean_code)
         full_executable_code = "\n".join(executable_script_parts)
 
-        # Write script to disk for execution
-        script_file.write_text(full_executable_code, encoding="utf-8")
-
-        initial_images = self._snapshot_images()
-        initial_jsons = self._snapshot_json_files()
-
         env = dict(os.environ)
-        # Ensure headless operation
         env["MPLBACKEND"] = "Agg"
         env["PYTHONUNBUFFERED"] = "1"
         py_bin_path = Path(self.python_bin)
         if py_bin_path.parent.name in ("bin", "Scripts"):
             env["VIRTUAL_ENV"] = str(py_bin_path.parent.parent)
-            env["PATH"] = f"{py_bin_path.parent}:{env.get('PATH', '')}"
+            env["PATH"] = f"{py_bin_path.parent}{os.pathsep}{env.get('PATH', '')}"
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                self.python_bin,
-                str(script_file),
-                cwd=str(self.output_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
+        with tempfile.TemporaryDirectory(prefix="ml_run_") as tmp_dir:
+            run_dir = Path(tmp_dir)
+            script_file = run_dir / "ml_script.py"
+            script_file.write_text(full_executable_code, encoding="utf-8")
 
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                process.communicate(),
-                timeout=float(self.timeout_seconds),
-            )
-
-            stdout = stdout_bytes.decode("utf-8", errors="replace")
-            stderr = stderr_bytes.decode("utf-8", errors="replace")
-            returncode = process.returncode or 0
-
-            # 1. Detect newly created or updated Plotly JSON charts on disk
-            current_jsons = self._snapshot_json_files()
-            new_json_paths = [
-                p
-                for p, mtime in current_jsons.items()
-                if p not in initial_jsons or mtime > initial_jsons[p] or mtime >= (start_time - 2.0)
-            ]
-            new_json_paths = sorted(new_json_paths, key=lambda p: current_jsons[p])
-
-            if not new_json_paths and current_jsons:
-                newest = max(current_jsons.keys(), key=lambda p: current_jsons[p])
-                if current_jsons[newest] >= (start_time - 600.0):
-                    new_json_paths = [newest]
-
-            charts: List[Dict[str, Any]] = []
-            for jp in new_json_paths:
-                try:
-                    spec_content = json.loads(jp.read_text(encoding="utf-8"))
-                    if isinstance(spec_content, dict) and ("data" in spec_content or "layout" in spec_content):
-                        charts.append({
-                            "file_name": jp.name,
-                            "spec": spec_content,
-                        })
-                except Exception as ex:
-                    logger.warning(f"Could not parse chart JSON from {jp.name}: {ex}")
-
-            clean_stdout = stdout.strip()
-
-            success = returncode == 0
-            return {
-                "success": success,
-                "returncode": returncode,
-                "stdout": clean_stdout,
-                "raw_stdout": stdout.strip(),
-                "stderr": stderr.strip(),
-                "error_trace": stderr.strip() if not success else "",
-                "code": clean_code,
-                "script_path": str(script_file.resolve()),
-                "plots": [],
-                "charts": charts,
-            }
-
-        except asyncio.TimeoutError:
+            process: Optional[asyncio.subprocess.Process] = None
             try:
-                process.kill()
-            except Exception:
-                pass
-            return {
-                "success": False,
-                "returncode": -1,
-                "stdout": "",
-                "stderr": f"Execution timed out after {self.timeout_seconds} seconds.",
-                "error_trace": f"TimeoutError: Execution exceeded {self.timeout_seconds}s limit.",
-                "code": clean_code,
-                "script_path": str(script_file.resolve()),
-                "plots": [],
-                "charts": [],
-            }
-        except Exception as exc:
-            return {
-                "success": False,
-                "returncode": -1,
-                "stdout": "",
-                "stderr": str(exc),
-                "error_trace": str(exc),
-                "code": clean_code,
-                "script_path": str(script_file.resolve()),
-                "plots": [],
-                "charts": [],
-            }
-        finally:
-            # Immediately delete the script file from disk to ensure zero filesystem residue
-            try:
-                script_file.unlink(missing_ok=True)
-            except Exception as ex:
-                logger.debug(f"Could not delete temp script file {script_file.name}: {ex}")
+                process = await asyncio.create_subprocess_exec(
+                    self.python_bin,
+                    str(script_file),
+                    cwd=str(run_dir),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=float(self.timeout_seconds),
+                )
+
+                stdout = stdout_bytes.decode("utf-8", errors="replace").strip()
+                stderr = stderr_bytes.decode("utf-8", errors="replace").strip()
+                returncode = process.returncode or 0
+                success = returncode == 0
+
+                charts = self._collect_json_charts(run_dir)
+
+                return {
+                    "success": success,
+                    "returncode": returncode,
+                    "stdout": stdout,
+                    "raw_stdout": stdout,
+                    "stderr": stderr,
+                    "error_trace": stderr if not success else "",
+                    "code": clean_code,
+                    "script_path": str(script_file),
+                    "plots": [],
+                    "charts": charts,
+                }
+
+            except asyncio.TimeoutError:
+                if process is not None:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                return {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": f"Execution timed out after {self.timeout_seconds} seconds.",
+                    "error_trace": f"TimeoutError: Execution exceeded {self.timeout_seconds}s limit.",
+                    "code": clean_code,
+                    "script_path": str(script_file),
+                    "plots": [],
+                    "charts": [],
+                }
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "error_trace": str(exc),
+                    "code": clean_code,
+                    "script_path": str(script_file),
+                    "plots": [],
+                    "charts": [],
+                }

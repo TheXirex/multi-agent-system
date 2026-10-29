@@ -1,5 +1,4 @@
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 from sqlalchemy import Engine, text
 
@@ -37,16 +36,9 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
         "required": ["query"],
     }
 
-    def __init__(self, engine: Engine, output_dir: Optional[Path] = None) -> None:
-        """
-        Initializes the SQL execution tool.
-
-        Args:
-            engine (Engine): SQLAlchemy database engine.
-            output_dir (Optional[Path]): Optional legacy output directory parameter retained for compatibility.
-        """
+    def __init__(self, engine: Engine) -> None:
+        """Initializes the SQL execution tool."""
         self.engine = engine
-        self.output_dir = output_dir
 
     def execute(
         self,

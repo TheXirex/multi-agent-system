@@ -645,7 +645,7 @@ def create_db_agent(settings: Optional[Settings] = None) -> DBAgent:
     inspector = DatabaseInspector(engine)
 
     registry = ToolRegistry()
-    sql_tool = ExecuteSQLAndExportCSVTool(engine=engine, output_dir=cfg.csv_output_dir)
+    sql_tool = ExecuteSQLAndExportCSVTool(engine=engine)
     registry.register(sql_tool)
     ingest_tool = IngestTabularFileTool(engine=engine)
     registry.register(ingest_tool)
