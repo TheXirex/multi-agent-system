@@ -1,6 +1,3 @@
-"""
-Observability module providing tracing and instrumentation with Langfuse.
-"""
 from shared.observability.client import (
     flush_langfuse,
     get_langfuse,

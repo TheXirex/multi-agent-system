@@ -1,12 +1,9 @@
-"""
-Standalone AI Multi-Agent Service.
-Exposes Orchestrator Agent, MCP tools, and LLM processing over HTTP.
-"""
 from contextlib import asynccontextmanager
+import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
-import json
+from typing import Any, AsyncGenerator, Dict, List, Optional
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -24,9 +21,7 @@ _orchestrator: Optional[OrchestratorAgent] = None
 
 
 def get_orchestrator() -> OrchestratorAgent:
-    """
-    Returns or lazily builds the shared OrchestratorAgent instance.
-    """
+    """Returns or lazily initializes the shared singleton OrchestratorAgent instance."""
     global _orchestrator
     if _orchestrator is None:
         _orchestrator = build_orchestrator()
@@ -34,6 +29,8 @@ def get_orchestrator() -> OrchestratorAgent:
 
 
 class ProcessQueryRequest(BaseModel):
+    """Request payload for processing a natural language query through the Orchestrator."""
+
     query: str
     history: List[Dict[str, Any]] = Field(default_factory=list)
     active_metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -42,6 +39,8 @@ class ProcessQueryRequest(BaseModel):
 
 
 class ProcessQueryResponse(BaseModel):
+    """Response payload returned by the synchronous Orchestrator processing endpoint."""
+
     response: str
     metadata: Dict[str, Any] = Field(default_factory=dict)
     session_id: Optional[str] = None
@@ -49,7 +48,8 @@ class ProcessQueryResponse(BaseModel):
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Initializes the Orchestrator on service startup and logs shutdown."""
     logger.info("Starting AI Multi-Agent Service...")
     get_orchestrator()
     yield
@@ -74,14 +74,13 @@ app.add_middleware(
 
 @app.get("/health")
 async def health_check() -> Dict[str, str]:
+    """Returns service health status."""
     return {"status": "ok", "service": "ai"}
 
 
 @app.get("/tools")
 async def list_tools() -> Dict[str, Any]:
-    """
-    Lists all MCP tools exposed by connected domain agents.
-    """
+    """Lists all MCP tools exposed by connected domain agents."""
     orchestrator = get_orchestrator()
     async with orchestrator.mcp_manager.open_session() as session:
         tools = await session.list_tools()
@@ -101,9 +100,7 @@ async def list_tools() -> Dict[str, Any]:
 
 @app.post("/process", response_model=ProcessQueryResponse)
 async def process_query(req: ProcessQueryRequest) -> ProcessQueryResponse:
-    """
-    Executes natural language query through multi-agent orchestrator.
-    """
+    """Executes a natural language query through the multi-agent orchestrator."""
     orchestrator = get_orchestrator()
     try:
         result: FinalOrchestratorResult = await orchestrator.process_query(
@@ -125,14 +122,11 @@ async def process_query(req: ProcessQueryRequest) -> ProcessQueryResponse:
 
 
 @app.post("/process/stream")
-async def process_query_stream_endpoint(req: ProcessQueryRequest):
-    """
-    Server-Sent Events (SSE) streaming endpoint yielding real-time tool action labels
-    and the final structured response.
-    """
+async def process_query_stream_endpoint(req: ProcessQueryRequest) -> StreamingResponse:
+    """Streams real-time tool action labels and the final structured response over SSE."""
     orchestrator = get_orchestrator()
 
-    async def event_generator():
+    async def event_generator() -> AsyncGenerator[str, None]:
         try:
             async for event in orchestrator.process_query_stream(
                 query=req.query,
@@ -150,6 +144,7 @@ async def process_query_stream_endpoint(req: ProcessQueryRequest):
 
 
 def main() -> None:
+    """Starts the Uvicorn ASGI server hosting the AI Multi-Agent Service."""
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8001"))
     uvicorn.run("agents.service:app", host=host, port=port, reload=False)

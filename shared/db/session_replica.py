@@ -1,14 +1,12 @@
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy import Engine, text
 
 logger = logging.getLogger(__name__)
 
 
 def get_session_schema_name(session_id: str) -> str:
-    """
-    Constructs a safe, deterministic PostgreSQL schema identifier for a session.
-    """
+    """Constructs a safe, deterministic PostgreSQL schema identifier for a session."""
     clean_id = "".join(c if c.isalnum() else "_" for c in str(session_id).lower().strip())
     return f"session_{clean_id}"
 
@@ -17,13 +15,6 @@ def ensure_session_replica(engine: Engine, session_id: str) -> str:
     """
     Ensures an isolated PostgreSQL schema replica exists for the given session.
     If it does not exist yet, clones all baseline tables and data from 'public'.
-
-    Args:
-        engine: SQLAlchemy Engine instance.
-        session_id: Unique chat session ID.
-
-    Returns:
-        str: The allocated schema name (e.g. 'session_abc123').
     """
     if not session_id:
         return "public"
@@ -59,7 +50,10 @@ def ensure_session_replica(engine: Engine, session_id: str) -> str:
         for tbl in base_tables:
             try:
                 conn.execute(
-                    text(f'CREATE TABLE IF NOT EXISTS "{schema_name}"."{tbl}" (LIKE public."{tbl}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)')
+                    text(
+                        f'CREATE TABLE IF NOT EXISTS "{schema_name}"."{tbl}" '
+                        f'(LIKE public."{tbl}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS INCLUDING INDEXES)'
+                    )
                 )
                 conn.execute(
                     text(f'INSERT INTO "{schema_name}"."{tbl}" SELECT * FROM public."{tbl}" ON CONFLICT DO NOTHING')
@@ -72,17 +66,7 @@ def ensure_session_replica(engine: Engine, session_id: str) -> str:
 
 
 def drop_session_replica(engine: Engine, session_id: str) -> bool:
-    """
-    Drops the isolated session schema and all its cloned tables, user-created tables,
-    and session-uploaded datasets permanently.
-
-    Args:
-        engine: SQLAlchemy Engine instance.
-        session_id: Unique chat session ID.
-
-    Returns:
-        bool: True if schema drop was executed successfully.
-    """
+    """Drops the isolated session schema and all its cloned or user-created tables permanently."""
     if not session_id:
         return False
 
@@ -100,20 +84,16 @@ def drop_session_replica(engine: Engine, session_id: str) -> bool:
 
 
 def get_session_schema_or_public(session_id: Optional[str]) -> str:
-    """
-    Returns session schema name if session_id is provided, otherwise falls back to 'public'.
-    """
+    """Returns the session schema name if session_id is provided, otherwise falls back to 'public'."""
     if session_id:
         return get_session_schema_name(session_id)
     return "public"
 
 
-def apply_session_search_path(conn, session_id: Optional[str]) -> None:
-    """
-    Sets search_path for the active database connection to prioritize the session replica schema.
-    """
+def apply_session_search_path(conn: Any, session_id: Optional[str]) -> None:
+    """Sets search_path for the active database connection to prioritize the session replica schema."""
     if session_id:
         schema_name = get_session_schema_name(session_id)
         conn.execute(text(f'SET search_path TO "{schema_name}", internal, public'))
     else:
-        conn.execute(text('SET search_path TO public, internal'))
+        conn.execute(text("SET search_path TO public, internal"))

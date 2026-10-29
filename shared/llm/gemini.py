@@ -14,9 +14,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="langchain_google
 
 
 class GeminiLLM(BaseLLM):
-    """
-    Gemini LLM client implementation using LangChain ChatGoogleGenerativeAI.
-    """
+    """Gemini LLM client implementation using LangChain ChatGoogleGenerativeAI."""
 
     def __init__(
         self,
@@ -24,6 +22,7 @@ class GeminiLLM(BaseLLM):
         model_name: Optional[str] = None,
         temperature: float = 0.0,
     ) -> None:
+        """Initializes the Gemini LLM client wrapper."""
         resolved_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("GEMINI_API_KEY")
         if not resolved_key:
             raise ValueError("LLM API key must be provided or set in LLM_API_KEY environment variable.")
@@ -38,15 +37,7 @@ class GeminiLLM(BaseLLM):
         )
 
     def get_chat_model(self) -> BaseChatModel:
-        """
-        Retrieves the underlying LangChain ChatGoogleGenerativeAI model.
-
-        Args:
-            None
-
-        Returns:
-            BaseChatModel: Configured ChatGoogleGenerativeAI instance.
-        """
+        """Retrieves the underlying LangChain ChatGoogleGenerativeAI model."""
         return self.chat_model
 
     def generate(
@@ -55,17 +46,7 @@ class GeminiLLM(BaseLLM):
         system_instruction: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
-        """
-        Generates text completion using the LangChain chat model.
-
-        Args:
-            prompt (str): Input prompt for the LLM.
-            system_instruction (Optional[str]): System prompt or persona instruction.
-            **kwargs (Any): Additional parameters passed to invoke.
-
-        Returns:
-            str: Generated text response from Gemini.
-        """
+        """Generates text completion using the LangChain chat model."""
         messages: List[BaseMessage] = []
         if system_instruction:
             messages.append(SystemMessage(content=system_instruction))
@@ -73,4 +54,3 @@ class GeminiLLM(BaseLLM):
 
         response = self.chat_model.invoke(messages, **kwargs)
         return extract_text_from_message_content(response.content)
-

@@ -1,6 +1,3 @@
-"""
-Shared metadata schemas, constants, and helpers across all agents and backend.
-"""
 from shared.metadata.helpers import (
     consolidate_metadata,
     extract_tool_text,

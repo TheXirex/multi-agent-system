@@ -2,22 +2,23 @@ import json
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from shared.metadata.schema import TRACKED_METADATA_KEYS, truncate_words
+from shared.metadata.schema import TRACKED_METADATA_KEYS
 
 logger = logging.getLogger(__name__)
 
 
+def _parse_positive_int(val: Any) -> Optional[int]:
+    """Parses a positive integer ID from an integer or digit string value, ignoring booleans."""
+    if isinstance(val, int) and not isinstance(val, bool) and val > 0:
+        return val
+    if isinstance(val, str) and val.strip().isdigit():
+        parsed = int(val.strip())
+        return parsed if parsed > 0 else None
+    return None
+
+
 def extract_tool_text(structured_data: Optional[Dict[str, Any]], raw_content: Any) -> str:
-    """
-    Extracts readable textual output or formatted JSON payload from a tool execution.
-
-    Args:
-        structured_data: Structured dictionary payload returned by the tool, if any.
-        raw_content: Raw MCP content payload.
-
-    Returns:
-        str: Text representation of tool output.
-    """
+    """Extracts readable textual output or formatted JSON payload from a tool execution."""
     if structured_data and isinstance(structured_data, dict):
         resp_text = structured_data.get("response") or structured_data.get("schema")
         if resp_text:
@@ -38,13 +39,13 @@ def consolidate_metadata(
     Extracts and updates tracked metadata across dictionary sources (e.g. metadata and structured_data).
 
     Args:
-        sources: Tuple of dictionary outputs (e.g. result.metadata, result.structured_data).
-        target_metadata: Mutable dictionary accumulating session metadata.
-        last_dataset_id: ID of the most recent dataset prior to consolidation.
-        last_exported_csv: File path of the most recent CSV prior to consolidation.
+        sources (Tuple[Any, ...]): Tuple of dictionary outputs (e.g. result.metadata, result.structured_data).
+        target_metadata (Dict[str, Any]): Mutable dictionary accumulating session metadata.
+        last_dataset_id (Optional[int]): ID of the most recent dataset prior to consolidation.
+        last_exported_csv (Optional[str]): File path of the most recent dataset prior to consolidation.
 
     Returns:
-        Tuple[Optional[int], Optional[str]]: (updated_last_dataset_id, updated_last_exported_csv)
+        Tuple[Optional[int], Optional[str]]: Updated (last_dataset_id, last_exported_csv) tuple.
     """
     for source in sources:
         if not isinstance(source, dict):
@@ -55,10 +56,9 @@ def consolidate_metadata(
             if val is not None and val != "":
                 target_metadata[key] = val
                 if key == "dataset_id":
-                    try:
-                        last_dataset_id = int(val)
-                    except (ValueError, TypeError):
-                        pass
+                    parsed_id = _parse_positive_int(val)
+                    if parsed_id is not None:
+                        last_dataset_id = parsed_id
 
         # Preserve and assign SQL / Python script IDs specifically
         if source.get("sql_query"):
@@ -118,15 +118,15 @@ def resolve_tool_arguments(
 ) -> Dict[str, Any]:
     """
     Resolves dynamic step arguments by injecting session context, active dataset IDs,
-    or exported CSV paths from preceding steps.
+    or table names from preceding steps.
 
     Args:
-        tool_name: Name of the MCP tool to be invoked.
-        raw_arguments: Original arguments defined in the plan step.
-        active_metadata: Current active session metadata dictionary.
-        session_id: Target session ID.
-        last_dataset_id: ID of the most recently produced or active dataset.
-        last_exported_csv: File path of the most recently exported CSV.
+        tool_name (str): Name of the MCP tool to be invoked.
+        raw_arguments (Optional[Dict[str, Any]]): Original arguments defined in the plan step.
+        active_metadata (Optional[Dict[str, Any]]): Current active session metadata dictionary.
+        session_id (Optional[str]): Target session ID.
+        last_dataset_id (Optional[int]): ID of the most recently produced or active dataset.
+        last_exported_csv (Optional[str]): File path of the most recently exported dataset.
 
     Returns:
         Dict[str, Any]: Fully resolved arguments dictionary ready for tool execution.
@@ -145,12 +145,7 @@ def resolve_tool_arguments(
     elif "dataset_ids" in step_args:
         raw_ids = step_args.get("dataset_ids")
         if isinstance(raw_ids, list):
-            clean_ids = []
-            for x in raw_ids:
-                if isinstance(x, int) and not isinstance(x, bool):
-                    clean_ids.append(x)
-                elif isinstance(x, str) and x.strip().isdigit():
-                    clean_ids.append(int(x.strip()))
+            clean_ids = [parsed for x in raw_ids if (parsed := _parse_positive_int(x)) is not None]
             if clean_ids:
                 step_args["dataset_ids"] = clean_ids
             else:
@@ -160,19 +155,13 @@ def resolve_tool_arguments(
 
     # 3. Dynamic dataset_id resolution (placeholder or missing)
     if "dataset_id" in step_args:
-        val = step_args.get("dataset_id")
-        is_valid_int = False
-        if isinstance(val, int) and not isinstance(val, bool):
-            is_valid_int = True
-        elif isinstance(val, str) and val.strip().isdigit():
-            is_valid_int = True
-            step_args["dataset_id"] = int(val.strip())
-
-        if not is_valid_int or step_args.get("dataset_id") == 0:
-            if last_dataset_id:
-                step_args["dataset_id"] = int(last_dataset_id)
-            else:
-                step_args.pop("dataset_id", None)
+        parsed_id = _parse_positive_int(step_args.get("dataset_id"))
+        if parsed_id is not None:
+            step_args["dataset_id"] = parsed_id
+        elif last_dataset_id:
+            step_args["dataset_id"] = int(last_dataset_id)
+        else:
+            step_args.pop("dataset_id", None)
     elif last_dataset_id and "dataset_id" not in step_args and tool_name in ("run_ml_analysis", "ml_analysis"):
         step_args["dataset_id"] = int(last_dataset_id)
 

@@ -4,11 +4,10 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 
 class PromptLoader:
-    """
-    Loads and renders Jinja2 prompt templates from a specified directory.
-    """
+    """Loads and renders Jinja2 prompt templates from a specified directory."""
 
     def __init__(self, template_dir: Path | str) -> None:
+        """Initializes the Jinja2 prompt loader for the specified template directory."""
         self.template_dir = Path(template_dir)
         self.env = Environment(
             loader=FileSystemLoader(str(self.template_dir)),
@@ -18,16 +17,7 @@ class PromptLoader:
         )
 
     def render(self, template_name: str, **kwargs: Any) -> str:
-        """
-        Renders a Jinja2 template by name with supplied parameters.
-
-        Args:
-            template_name (str): Name of the template file (with or without .j2 extension).
-            **kwargs: Context variables passed to template.
-
-        Returns:
-            str: Rendered prompt string.
-        """
+        """Renders a Jinja2 template by name with the supplied context variables."""
         filename = template_name if template_name.endswith(".j2") else f"{template_name}.j2"
         template = self.env.get_template(filename)
         return template.render(**kwargs).strip()

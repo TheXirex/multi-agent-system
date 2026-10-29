@@ -5,21 +5,11 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 
 class BaseLLM(ABC):
-    """
-    Abstract base interface for LLM client implementations providing LangChain chat model integration.
-    """
+    """Abstract base interface for LLM client implementations providing LangChain chat model integration."""
 
     @abstractmethod
     def get_chat_model(self) -> BaseChatModel:
-        """
-        Retrieves the underlying LangChain BaseChatModel instance.
-
-        Args:
-            None
-
-        Returns:
-            BaseChatModel: Configured LangChain chat model.
-        """
+        """Retrieves the underlying LangChain BaseChatModel instance."""
         pass
 
     @abstractmethod
@@ -29,30 +19,12 @@ class BaseLLM(ABC):
         system_instruction: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
-        """
-        Generates text completion based on the given prompt and optional system instruction.
-
-        Args:
-            prompt (str): Input prompt for the LLM.
-            system_instruction (Optional[str]): System prompt or persona instruction.
-            **kwargs (Any): Additional model configuration parameters.
-
-        Returns:
-            str: Generated text response from the model.
-        """
+        """Generates text completion based on the given prompt and optional system instruction."""
         pass
 
 
 def extract_text_from_message_content(content: Any) -> str:
-    """
-    Extracts plain text string from LangChain message content (str or list of text blocks).
-
-    Args:
-        content (Any): Message content from BaseMessage.
-
-    Returns:
-        str: Plain text representation of the message content.
-    """
+    """Extracts plain text string from LangChain message content (str or list of text blocks)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -68,4 +40,3 @@ def extract_text_from_message_content(content: Any) -> str:
                 parts.append(str(part))
         return "".join(parts)
     return str(content)
-

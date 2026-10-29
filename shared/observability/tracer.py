@@ -8,38 +8,42 @@ logger = logging.getLogger(__name__)
 
 
 class DummySpan:
-    """
-    Fallback no-op span for environments where Langfuse is not enabled or unreachable.
-    """
+    """Fallback no-op span for environments where Langfuse is not enabled or unreachable."""
 
     def __init__(self, name: str = "dummy", id: str = "dummy-id", trace_id: str = "dummy-trace-id") -> None:
+        """Initializes a no-op dummy span."""
         self.name = name
         self.id = id
         self.trace_id = trace_id
 
     def update(self, *args: Any, **kwargs: Any) -> "DummySpan":
+        """No-op span update."""
         return self
 
     def end(self, *args: Any, **kwargs: Any) -> "DummySpan":
+        """No-op span end."""
         return self
 
     def span(self, *args: Any, **kwargs: Any) -> "DummySpan":
+        """Creates a child no-op dummy span."""
         return DummySpan()
 
     def generation(self, *args: Any, **kwargs: Any) -> "DummySpan":
+        """Creates a child no-op dummy generation span."""
         return DummySpan()
 
     def event(self, *args: Any, **kwargs: Any) -> "DummySpan":
+        """Creates a child no-op dummy event."""
         return DummySpan()
 
     def get_langchain_handler(self, *args: Any, **kwargs: Any) -> Optional[Any]:
+        """Returns None when Langfuse is inactive so LangChain runs without tracing callbacks."""
         return None
 
 
 class DummyTrace(DummySpan):
-    """
-    Fallback no-op trace.
-    """
+    """Fallback no-op trace for environments where Langfuse is not enabled or unreachable."""
+
     pass
 
 
@@ -52,6 +56,16 @@ def get_langfuse_callback_handler(
 ) -> Optional[Any]:
     """
     Creates and returns a Langfuse CallbackHandler for LangChain and LangGraph runnables.
+
+    Args:
+        trace_name (Optional[str]): Optional root trace name.
+        session_id (Optional[str]): Optional session identifier.
+        user_id (Optional[str]): Optional user identifier.
+        tags (Optional[List[str]]): Optional list of trace tags.
+        metadata (Optional[Dict[str, Any]]): Optional trace metadata dictionary.
+
+    Returns:
+        Optional[Any]: Configured Langfuse CallbackHandler or None if unavailable.
     """
     client = get_langfuse()
     if client is None:
@@ -92,7 +106,20 @@ def create_trace(
     trace_id: Optional[str] = None,
 ) -> Any:
     """
-    Creates a new root trace in Langfuse.
+    Creates a new root trace in Langfuse or returns a no-op DummyTrace on fallback.
+
+    Args:
+        name (str): Trace name.
+        session_id (Optional[str]): Optional chat session ID.
+        user_id (Optional[str]): Optional user identifier.
+        input_data (Any): Input payload recorded on the trace.
+        output_data (Any): Output payload recorded on the trace.
+        metadata (Optional[Dict[str, Any]]): Trace metadata dictionary.
+        tags (Optional[List[str]]): List of trace classification tags.
+        trace_id (Optional[str]): Optional deterministic trace UUID.
+
+    Returns:
+        Any: StatefulTraceClient or DummyTrace instance.
     """
     client = get_langfuse()
     if client is None:
@@ -135,7 +162,18 @@ def trace_span(
     Context manager that wraps execution in a Langfuse span.
     Supports nesting under a parent span/trace or attaching to an existing trace_id
     and parent_observation_id across distributed agent calls.
-    Captures input, output, errors, and metadata transitions.
+
+    Args:
+        name (str): Span name.
+        parent (Optional[Any]): Parent trace or span object.
+        trace_id (Optional[str]): Distributed trace ID when parent object is not in-process.
+        parent_observation_id (Optional[str]): Distributed parent observation ID.
+        input_data (Any): Input payload recorded on the span.
+        metadata (Optional[Dict[str, Any]]): Metadata dictionary recorded on the span.
+        level (str): Observation severity level ('DEFAULT', 'WARNING', 'ERROR').
+
+    Yields:
+        Any: Active Langfuse span client or DummySpan fallback.
     """
     span_obj = None
     try:

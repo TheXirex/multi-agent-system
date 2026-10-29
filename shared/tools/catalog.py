@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 # Generalized catalog of MCP tools, short action labels for live execution, and descriptions
 TOOL_ACTION_CATALOG: Dict[str, Dict[str, str]] = {
@@ -23,8 +23,8 @@ TOOL_ACTION_CATALOG: Dict[str, Dict[str, str]] = {
         "description": "Parses CSV or Excel files and provisions dedicated relational tables.",
     },
     "execute_sql_to_csv": {
-        "label": "Exporting data to CSV...",
-        "description": "Executes SQL query and saves records as downloadable CSV attachment.",
+        "label": "Executing SQL query...",
+        "description": "Executes a raw SQL query against the database and retrieves resulting records.",
     },
     "run_ml_analysis": {
         "label": "Analyzing data & generating insights...",
@@ -36,9 +36,7 @@ DEFAULT_ACTION_LABEL = "Executing step..."
 
 
 def get_tool_action_label(tool_name: str, fallback: Optional[str] = None) -> str:
-    """
-    Returns the concise user-facing action label for a given tool.
-    """
+    """Returns the concise user-facing action label for a given tool."""
     tool_info = TOOL_ACTION_CATALOG.get(tool_name)
     if tool_info and "label" in tool_info:
         return tool_info["label"]
@@ -46,9 +44,7 @@ def get_tool_action_label(tool_name: str, fallback: Optional[str] = None) -> str
 
 
 def get_tool_description(tool_name: str, fallback: Optional[str] = None) -> str:
-    """
-    Returns the short description for a given tool.
-    """
+    """Returns the short human-readable description for a given tool."""
     tool_info = TOOL_ACTION_CATALOG.get(tool_name)
     if tool_info and "description" in tool_info:
         return tool_info["description"]
