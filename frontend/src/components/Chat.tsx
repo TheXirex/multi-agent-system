@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useLayoutEffect, useState } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import type { Message } from '../types';
 import { marked } from 'marked';
 import Prism from 'prismjs';
@@ -6,6 +6,8 @@ import 'prismjs/components/prism-python';
 import 'prismjs/components/prism-sql';
 import 'prismjs/themes/prism-tomorrow.css';
 import { Paperclip, Send, User, X, ArrowRightToLine, FileSpreadsheet } from 'lucide-react';
+import { formatFileSize } from '../utils/formatters';
+import { useScrollGutter } from '../utils/scrollAutoHide';
 import { PlotlyChart } from './PlotlyChart';
 import { CodeViewer } from './CodeViewer';
 import { FileAttachModal } from './FileAttachModal';
@@ -42,50 +44,14 @@ export const Chat: React.FC<ChatProps> = ({
   const [isAttachModalOpen, setIsAttachModalOpen] = useState(false);
 
   const messagesScrollRef = useRef<HTMLDivElement>(null);
-  const [scrollGutter, setScrollGutter] = useState<number>(() => 10);
+  const scrollGutter = useScrollGutter(messagesScrollRef, `${messages.length}-${isBusy}`, 10);
 
-  // Measure active scrollbar width and include it into right padding so static gaps remain balanced
-  useLayoutEffect(() => {
-    const el = messagesScrollRef.current;
-    if (!el) return;
-
-    const updateGutter = () => {
-      // offsetWidth is outer layout box; clientWidth is inner area excluding scrollbar.
-      // With border: 0, (offsetWidth - clientWidth) yields the active scrollbar reservation width.
-      const sw = Math.max(0, el.offsetWidth - el.clientWidth);
-      setScrollGutter(sw);
-    };
-
-    updateGutter();
-    const rafId = requestAnimationFrame(updateGutter);
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        updateGutter();
-      });
-      resizeObserver.observe(el);
-    }
-
-    window.addEventListener('resize', updateGutter);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-      window.removeEventListener('resize', updateGutter);
-    };
-  }, [messages, isBusy]);
-
-  // Only show the version restore arrow when there are 2 or more orchestrator states
   const orchestratorStatesCount =
     typeof turnsCount === 'number'
       ? turnsCount
       : messages.filter((m) => m.role === 'assistant' && typeof m.turnIndex === 'number').length;
   const showTurnArrow = orchestratorStatesCount >= 2;
 
-  // Auto-scroll to bottom on new messages and highlight code blocks
   useEffect(() => {
     if (messagesScrollRef.current) {
       messagesScrollRef.current.scrollTop = messagesScrollRef.current.scrollHeight;
@@ -116,48 +82,24 @@ export const Chat: React.FC<ChatProps> = ({
 
   return (
     <div className="panel-card">
-      {/* 1. Chat Message Stream */}
       <div
         ref={messagesScrollRef}
-        className="scroll-auto-hide"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          paddingTop: '16px',
-          paddingBottom: '16px',
-          paddingLeft: '16px',
-          paddingRight: `${Math.max(0, 16 - scrollGutter)}px`,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-        }}
+        className="scroll-auto-hide chat-stream"
+        style={{ paddingRight: `${Math.max(0, 16 - scrollGutter)}px` }}
       >
-        {/* Welcome card always present at the beginning of the conversation */}
-        <div
-          style={{
-            backgroundColor: 'rgba(52, 58, 64, 0.8)',
-            border: '1px solid rgba(73, 80, 87, 0.7)',
-            borderRadius: 'var(--app-radius)',
-            padding: '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <span style={{ fontSize: '13px', fontWeight: 600, color: '#f8f9fa' }}>
-              Orchestrator Agent
-            </span>
-          </div>
+        <div className="welcome-card">
+          <span className="agent-label" style={{ fontSize: '13px' }}>
+            Orchestrator Agent
+          </span>
 
-          <div style={{ color: '#dee2e6', fontSize: '13px', lineHeight: 1.6 }}>
-            <p style={{ fontWeight: 600, color: '#f8f9fa', marginBottom: '8px' }}>
+          <div className="markdown-body" style={{ fontSize: '13px' }}>
+            <p style={{ fontWeight: 600, color: '#f8f9fa' }}>
               Welcome to the Multi-Agent Studio!
             </p>
-            <p style={{ color: '#ced4da', marginBottom: '8px' }}>
+            <p>
               I am the <strong>AI Orchestrator</strong>, coordinating domain agents to analyze data, execute SQL queries, and build machine learning workflows:
             </p>
-            <ul style={{ paddingLeft: '20px', color: '#ced4da', marginBottom: '8px' }}>
+            <ul>
               <li>📊 <strong>Database Agent</strong>: Inspects schemas, executes queries, and manages tables.</li>
               <li>🤖 <strong>Machine Learning Agent</strong>: Trains models and generates interactive Plotly visualizations.</li>
               <li>📁 <strong>Custom Datasets</strong>: Attach your own <code>.csv</code> or <code>.xlsx</code> files below to bind them to this session.</li>
@@ -167,35 +109,14 @@ export const Chat: React.FC<ChatProps> = ({
             </p>
           </div>
 
-          {/* Suggested prompts list */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div className="suggestions-list">
             {DEFAULT_SUGGESTIONS.map((prompt, idx) => (
               <div
                 key={idx}
                 onClick={() => {
-                  if (isBusy) return;
-                  onSendQuery(prompt);
+                  if (!isBusy) onSendQuery(prompt);
                 }}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: 'var(--app-radius)',
-                  backgroundColor: 'rgba(33, 37, 41, 0.9)',
-                  border: '1px solid rgba(73, 80, 87, 0.6)',
-                  color: '#ced4da',
-                  fontSize: '12px',
-                  cursor: isBusy ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.15s ease',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isBusy) {
-                    e.currentTarget.style.borderColor = '#adb5bd';
-                    e.currentTarget.style.color = '#f8f9fa';
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(73, 80, 87, 0.6)';
-                  e.currentTarget.style.color = '#ced4da';
-                }}
+                className={`suggestion-item ${isBusy ? 'disabled' : ''}`}
               >
                 {prompt}
               </div>
@@ -203,58 +124,20 @@ export const Chat: React.FC<ChatProps> = ({
           </div>
         </div>
 
-        {/* Message bubbles */}
         {messages.map((msg, index) => {
-          const isUser = msg.role === 'user';
-          const cardId = msg.turnIndex ? `chat-turn-${msg.turnIndex}` : undefined;
-
-          if (isUser) {
+          if (msg.role === 'user') {
             return (
-              <div
-                key={index}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  width: '100%',
-                }}
-              >
-                <div
-                  style={{
-                    maxWidth: '85%',
-                    backgroundColor: '#495057',
-                    color: '#f8f9fa',
-                    padding: '12px 14px',
-                    borderRadius: 'var(--app-radius)',
-                    border: '1px solid rgba(108, 117, 125, 0.6)',
-                    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', opacity: 0.85 }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600 }}>You</span>
+              <div key={index} className="user-bubble-row">
+                <div className="user-bubble">
+                  <div className="user-bubble-header">
+                    <span>You</span>
                     <User size={13} />
                   </div>
 
-                  {/* Attached files preview in user message */}
                   {msg.metadata?.attachments && msg.metadata.attachments.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', margin: '4px 0' }}>
+                    <div className="attachment-list">
                       {msg.metadata.attachments.map((att, aIdx) => (
-                        <div
-                          key={aIdx}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '5px',
-                            backgroundColor: '#343a40',
-                            border: '1px solid #6c757d',
-                            padding: '3px 8px',
-                            borderRadius: 'var(--app-radius)',
-                            fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
-                          }}
-                        >
+                        <div key={aIdx} className="attachment-chip">
                           <FileSpreadsheet size={13} color="#ced4da" />
                           <span>{att.filename}</span>
                         </div>
@@ -262,76 +145,38 @@ export const Chat: React.FC<ChatProps> = ({
                     </div>
                   )}
 
-                  <div style={{ whiteSpace: 'pre-wrap', fontSize: '13.5px', lineHeight: 1.5 }}>
-                    {msg.content}
-                  </div>
+                  <div className="user-bubble-text">{msg.content}</div>
                 </div>
               </div>
             );
           }
 
-          // Assistant message card
+          const cardId = msg.turnIndex ? `chat-turn-${msg.turnIndex}` : undefined;
+
           return (
-            <div
-              key={index}
-              id={cardId}
-              style={{
-                width: '100%',
-                backgroundColor: 'rgba(52, 58, 64, 0.8)',
-                border: '1px solid rgba(73, 80, 87, 0.7)',
-                borderRadius: 'var(--app-radius)',
-                padding: '14px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '12px',
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
-                transition: 'all 0.3s ease-in-out',
-                scrollMarginTop: '12px',
-              }}
-            >
-              {/* Header row: Identity + Turn #N jump button */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#f8f9fa' }}>
-                    Orchestrator Agent
-                  </span>
-                </div>
+            <div key={index} id={cardId} className="assistant-card">
+              <div className="card-header-row">
+                <span className="agent-label">Orchestrator Agent</span>
 
                 {msg.turnIndex && showTurnArrow && (
                   <button
                     onClick={() => onSelectTurn(msg.turnIndex!)}
                     aria-label={`Open Turn #${msg.turnIndex} in workspace`}
-                    style={{
-                      width: '24px',
-                      height: '24px',
-                      padding: 0,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      backgroundColor: currentTurnIndex === msg.turnIndex ? '#343a40' : '#212529',
-                      border: currentTurnIndex === msg.turnIndex ? '1px solid #adb5bd' : '1px solid #495057',
-                      color: currentTurnIndex === msg.turnIndex ? '#f8f9fa' : '#ced4da',
-                      borderRadius: 'var(--app-radius)',
-                      cursor: 'pointer',
-                    }}
+                    className={`turn-jump-btn ${currentTurnIndex === msg.turnIndex ? 'active' : ''}`}
                   >
                     <ArrowRightToLine size={13} />
                   </button>
                 )}
               </div>
 
-              {/* Markdown content */}
               <div
                 className="markdown-body"
                 dangerouslySetInnerHTML={{ __html: marked.parse(msg.content || '') as string }}
               />
 
-              {/* Inline interactive plots preview */}
               {msg.chartsData && msg.chartsData.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingTop: '6px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#ced4da', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                    Interactive Visualizations:
-                  </span>
+                <div className="charts-section">
+                  <span className="charts-section-label">Interactive Visualizations:</span>
                   {msg.chartsData.map((ch, cIdx) => (
                     <PlotlyChart
                       key={cIdx}
@@ -343,7 +188,6 @@ export const Chat: React.FC<ChatProps> = ({
                 </div>
               )}
 
-              {/* Python script widget */}
               {msg.pythonScript && (
                 <CodeViewer
                   code={msg.pythonScript}
@@ -354,7 +198,6 @@ export const Chat: React.FC<ChatProps> = ({
                 />
               )}
 
-              {/* SQL query widget */}
               {msg.sqlQuery && (
                 <CodeViewer
                   code={msg.sqlQuery}
@@ -372,70 +215,23 @@ export const Chat: React.FC<ChatProps> = ({
           );
         })}
 
-        {/* Thinking Indicator */}
         {isBusy && (
-          <div
-            style={{
-              padding: '12px 14px',
-              backgroundColor: 'rgba(52, 58, 64, 0.9)',
-              border: '1px solid rgba(73, 80, 87, 0.7)',
-              borderRadius: 'var(--app-radius)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
-              fontSize: '12px',
-              color: '#ced4da',
-              fontStyle: 'italic',
-            }}
-          >
-            <div
-              style={{
-                width: '12px',
-                height: '12px',
-                borderRadius: '50%',
-                border: '2px solid #ced4da',
-                borderTopColor: 'transparent',
-                animation: 'spin 0.8s linear infinite',
-              }}
-            />
+          <div className="thinking-banner">
+            <div className="spinner" />
             <span>{currentAction || 'Executing multi-agent workflow...'}</span>
           </div>
         )}
       </div>
 
-      {/* 2. Chat Input Box Form */}
-      <div
-        style={{
-          borderTop: '1px solid rgba(73, 80, 87, 0.6)',
-          backgroundColor: '#212529',
-          padding: '12px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '8px',
-        }}
-      >
-        {/* Pending attachment chip */}
+      <div className="chat-input-bar">
         {pendingFile && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                backgroundColor: '#343a40',
-                border: '1px solid #6c757d',
-                color: '#f8f9fa',
-                fontSize: '11px',
-                padding: '4px 10px',
-                borderRadius: 'var(--app-radius)',
-                fontFamily: 'var(--font-mono)',
-              }}
-            >
+          <div className="attachment-list" style={{ margin: 0 }}>
+            <div className="attachment-chip">
               <FileSpreadsheet size={13} color="#ced4da" />
-              <span>{pendingFile.name} ({(pendingFile.size / 1024).toFixed(1)} KB)</span>
+              <span>{pendingFile.name} ({formatFileSize(pendingFile.size)})</span>
               <button
                 onClick={() => setPendingFile(null)}
-                style={{ padding: '2px', color: '#adb5bd', marginLeft: '4px' }}
+                className="icon-action-btn"
                 title="Remove attachment"
               >
                 <X size={12} />
@@ -444,25 +240,16 @@ export const Chat: React.FC<ChatProps> = ({
           </div>
         )}
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* File attach button */}
+        <div className="chat-input-row">
           <button
             onClick={() => setIsAttachModalOpen(true)}
             aria-label="Attach dataset file"
             disabled={isBusy}
-            style={{
-              width: '38px',
-              height: '38px',
-              backgroundColor: '#343a40',
-              border: '1px solid #495057',
-              color: '#ced4da',
-              flexShrink: 0,
-            }}
+            className="btn-attach"
           >
             <Paperclip size={16} />
           </button>
 
-          {/* Text input area */}
           <textarea
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
@@ -470,31 +257,13 @@ export const Chat: React.FC<ChatProps> = ({
             placeholder="Ask the question..."
             disabled={isBusy}
             rows={1}
-            style={{
-              flex: 1,
-              padding: '9px 12px',
-              backgroundColor: '#343a40',
-              border: '1px solid #495057',
-              borderRadius: 'var(--app-radius)',
-              color: '#f8f9fa',
-              fontSize: '13px',
-              resize: 'none',
-              minHeight: '38px',
-              maxHeight: '120px',
-            }}
+            className="chat-textarea"
           />
 
-          {/* Send button */}
           <button
             onClick={handleSubmit}
             disabled={isBusy || (!inputText.trim() && !pendingFile)}
-            style={{
-              width: '38px',
-              height: '38px',
-              backgroundColor: '#f8f9fa',
-              color: '#212529',
-              flexShrink: 0,
-            }}
+            className="btn-send"
           >
             <Send size={15} />
           </button>
@@ -507,13 +276,6 @@ export const Chat: React.FC<ChatProps> = ({
         onSelectFile={(file) => setPendingFile(file)}
         currentFile={pendingFile}
       />
-
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
     </div>
   );
 };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import type { TurnArtifacts } from '../types';
 import {
   Table as TableIcon,
@@ -10,6 +10,7 @@ import {
   Database,
   Terminal,
 } from 'lucide-react';
+import { useScrollGutter } from '../utils/scrollAutoHide';
 import { PlotlyChart } from './PlotlyChart';
 import { CodeViewer } from './CodeViewer';
 
@@ -22,15 +23,50 @@ interface WorkspaceProps {
 
 type TabType = 'table' | 'plots' | 'code';
 
+interface EmptyTabStateProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}
+
+const EmptyTabState: React.FC<EmptyTabStateProps> = ({ icon, title, subtitle }) => (
+  <div className="empty-state">
+    {icon}
+    <span className="empty-state-title">{title}</span>
+    <span className="empty-state-subtitle">{subtitle}</span>
+  </div>
+);
+
+function resolvePreferredTab(
+  currentTab: TabType,
+  hasTable: boolean,
+  hasPlots: boolean,
+  hasCode: boolean
+): TabType {
+  if (currentTab === 'table' && hasTable) return 'table';
+  if (currentTab === 'plots' && hasPlots) return 'plots';
+  if (currentTab === 'code' && hasCode) return 'code';
+  if (hasPlots) return 'plots';
+  if (hasTable) return 'table';
+  if (hasCode) return 'code';
+  return currentTab;
+}
+
 export const Workspace: React.FC<WorkspaceProps> = ({
   turns,
   currentTurnIndex,
   onSelectTurn,
   onScrollToMessage,
 }) => {
-  const [activeTab, setActiveTab] = useState<TabType>('table');
-  const [tableSearch, setTableSearch] = useState('');
-  const [tablePage, setTablePage] = useState(1);
+  const [tabState, setTabState] = useState<{ tab: TabType; turnIndex: number }>({
+    tab: 'table',
+    turnIndex: currentTurnIndex,
+  });
+  const [searchState, setSearchState] = useState<{ query: string; page: number; turnIndex: number }>({
+    query: '',
+    page: 1,
+    turnIndex: currentTurnIndex,
+  });
   const [rowsPerPage, setRowsPerPage] = useState(15);
 
   const totalTurns = turns.length;
@@ -43,26 +79,20 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   const hasPlots = Boolean(activeTurn?.chartsData && activeTurn.chartsData.length > 0);
   const hasCode = Boolean(
     (activeTurn?.pythonScript && activeTurn.pythonScript.trim()) ||
-    (activeTurn?.sqlQuery && activeTurn.sqlQuery.trim())
+      (activeTurn?.sqlQuery && activeTurn.sqlQuery.trim())
   );
 
-  // Smart auto-tab switching when changing turns
-  useEffect(() => {
-    if (!activeTurn) return;
-    if (activeTab === 'table' && hasTable) return;
-    if (activeTab === 'plots' && hasPlots) return;
-    if (activeTab === 'code' && hasCode) return;
+  const activeTab: TabType =
+    tabState.turnIndex === currentTurnIndex
+      ? tabState.tab
+      : resolvePreferredTab(tabState.tab, hasTable, hasPlots, hasCode);
 
-    if (hasPlots) setActiveTab('plots');
-    else if (hasTable) setActiveTab('table');
-    else if (hasCode) setActiveTab('code');
-  }, [currentTurnIndex, hasTable, hasPlots, hasCode]);
+  const setActiveTab = (tab: TabType) => {
+    setTabState({ tab, turnIndex: currentTurnIndex });
+  };
 
-  // Reset table pagination when turn or dataset changes
-  useEffect(() => {
-    setTablePage(1);
-    setTableSearch('');
-  }, [currentTurnIndex, activeTurn?.datasetData?.id]);
+  const tableSearch = searchState.turnIndex === currentTurnIndex ? searchState.query : '';
+  const rawTablePage = searchState.turnIndex === currentTurnIndex ? searchState.page : 1;
 
   const handlePrevTurn = () => {
     if (currentTurnIndex > 1) {
@@ -80,7 +110,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({
     }
   };
 
-  // Filtered rows for dataset table
   const allRows = activeTurn?.datasetData?.rows || [];
   const columns = activeTurn?.datasetData?.columns || [];
 
@@ -93,70 +122,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({
     : allRows;
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / rowsPerPage));
+  const tablePage = Math.min(rawTablePage, totalPages);
   const paginatedRows = filteredRows.slice(
     (tablePage - 1) * rowsPerPage,
     tablePage * rowsPerPage
   );
 
   const bodyScrollRef = useRef<HTMLDivElement>(null);
-  const [scrollGutter, setScrollGutter] = useState<number>(0);
-
-  useEffect(() => {
-    const el = bodyScrollRef.current;
-    if (!el) return;
-
-    const updateGutter = () => {
-      const sw = Math.max(0, el.offsetWidth - el.clientWidth);
-      setScrollGutter(sw);
-    };
-
-    updateGutter();
-    const rafId = requestAnimationFrame(updateGutter);
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(updateGutter);
-      resizeObserver.observe(el);
-    }
-
-    window.addEventListener('resize', updateGutter);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      if (resizeObserver) resizeObserver.disconnect();
-      window.removeEventListener('resize', updateGutter);
-    };
-  }, [activeTab, activeTurn]);
+  const scrollGutter = useScrollGutter(bodyScrollRef, `${activeTab}-${currentTurnIndex}`, 0);
 
   return (
     <div className="panel-card">
-      {/* 1. Header Row: Tabs + Badges + Turn Navigator */}
-      <div
-        style={{
-          width: '100%',
-          padding: '6px 10px',
-          borderBottom: '1px solid rgba(73, 80, 87, 0.6)',
-          backgroundColor: '#212529',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '8px',
-          flexShrink: 0,
-        }}
-      >
-        {/* Left: Tab Switcher */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: 1 }}>
+      <div className="workspace-header">
+        <div className="workspace-tabs">
           <button
             onClick={() => setActiveTab('table')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              gap: '6px',
-              color: activeTab === 'table' ? '#f8f9fa' : '#adb5bd',
-              backgroundColor: activeTab === 'table' ? '#343a40' : 'transparent',
-              border: activeTab === 'table' ? '1px solid #495057' : '1px solid transparent',
-            }}
+            className={`tab-btn ${activeTab === 'table' ? 'active' : ''}`}
           >
             <TableIcon size={14} />
             <span>Table Data</span>
@@ -164,15 +145,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
 
           <button
             onClick={() => setActiveTab('plots')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              gap: '6px',
-              color: activeTab === 'plots' ? '#f8f9fa' : '#adb5bd',
-              backgroundColor: activeTab === 'plots' ? '#343a40' : 'transparent',
-              border: activeTab === 'plots' ? '1px solid #495057' : '1px solid transparent',
-            }}
+            className={`tab-btn ${activeTab === 'plots' ? 'active' : ''}`}
           >
             <BarChart2 size={14} />
             <span>Visualizations</span>
@@ -180,58 +153,24 @@ export const Workspace: React.FC<WorkspaceProps> = ({
 
           <button
             onClick={() => setActiveTab('code')}
-            style={{
-              padding: '6px 12px',
-              fontSize: '12px',
-              fontWeight: 600,
-              gap: '6px',
-              color: activeTab === 'code' ? '#f8f9fa' : '#adb5bd',
-              backgroundColor: activeTab === 'code' ? '#343a40' : 'transparent',
-              border: activeTab === 'code' ? '1px solid #495057' : '1px solid transparent',
-            }}
+            className={`tab-btn ${activeTab === 'code' ? 'active' : ''}`}
           >
             <CodeIcon size={14} />
             <span>Code & Scripts</span>
           </button>
         </div>
 
-        {/* Turn Navigator controls */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '2px',
-            backgroundColor: '#343a40',
-            border: '1px solid #495057',
-            padding: '2px 4px',
-            borderRadius: 'var(--app-radius)',
-            flexShrink: 0,
-          }}
-        >
+        <div className="turn-nav">
           <button
             onClick={handlePrevTurn}
             disabled={currentTurnIndex <= 1}
             title="Previous message artifacts"
-            style={{
-              padding: '4px',
-              color: currentTurnIndex > 1 ? '#f8f9fa' : '#6c757d',
-            }}
+            className="turn-nav-btn"
           >
             <ChevronLeft size={16} />
           </button>
 
-          <span
-            style={{
-              fontSize: '11px',
-              fontFamily: 'var(--font-mono)',
-              fontWeight: 600,
-              color: '#f8f9fa',
-              padding: '0 6px',
-              minWidth: '45px',
-              textAlign: 'center',
-              userSelect: 'none',
-            }}
-          >
+          <span className="turn-nav-counter">
             {totalTurns > 0 ? `${currentTurnIndex} / ${totalTurns}` : '0 / 0'}
           </span>
 
@@ -239,83 +178,31 @@ export const Workspace: React.FC<WorkspaceProps> = ({
             onClick={handleNextTurn}
             disabled={currentTurnIndex >= totalTurns}
             title="Next message artifacts"
-            style={{
-              padding: '4px',
-              color: currentTurnIndex < totalTurns ? '#f8f9fa' : '#6c757d',
-            }}
+            className="turn-nav-btn"
           >
             <ChevronRight size={16} />
           </button>
         </div>
       </div>
 
-      {/* 2. Main Tab Body */}
       <div
         ref={bodyScrollRef}
-        className="scroll-auto-hide"
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          paddingTop: '12px',
-          paddingBottom: '12px',
-          paddingLeft: '12px',
-          paddingRight: `${Math.max(0, 12 - scrollGutter)}px`,
-          minHeight: 0,
-        }}
+        className="scroll-auto-hide workspace-body"
+        style={{ paddingRight: `${Math.max(0, 12 - scrollGutter)}px` }}
       >
-        {/* ========================================================= */}
-        {/* TAB 1: TABLE DATA */}
-        {/* ========================================================= */}
         {activeTab === 'table' && (
-          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div className="tab-pane">
             {!hasTable ? (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px dashed rgba(73, 80, 87, 0.7)',
-                  borderRadius: 'var(--app-radius)',
-                  padding: '32px',
-                  color: '#adb5bd',
-                  textAlign: 'center',
-                }}
-              >
-                <Database size={36} color="#6c757d" style={{ marginBottom: '8px' }} />
-                <span style={{ fontSize: '14px', fontWeight: 600, color: '#ced4da' }}>
-                  No tabular dataset for this message
-                </span>
-                <span style={{ fontSize: '12px', color: '#6c757d', marginTop: '4px' }}>
-                  Ask a question to query database records, inspect tables, or upload a dataset.
-                </span>
-              </div>
+              <EmptyTabState
+                icon={<Database size={36} color="#6c757d" />}
+                title="No tabular dataset for this message"
+                subtitle="Ask a question to query database records, inspect tables, or upload a dataset."
+              />
             ) : (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  height: '100%',
-                  backgroundColor: '#212529',
-                  border: '1px solid rgba(73, 80, 87, 0.6)',
-                  borderRadius: 'var(--app-radius)',
-                  overflow: 'hidden',
-                }}
-              >
-                {/* Table sub-toolbar: search & count */}
-                <div
-                  style={{
-                    padding: '8px 12px',
-                    borderBottom: '1px solid rgba(73, 80, 87, 0.6)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '12px',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#f8f9fa' }}>
+              <div className="table-card">
+                <div className="table-toolbar">
+                  <div className="session-item-main">
+                    <span className="agent-label">
                       {activeTurn?.datasetData?.name || 'Dataset'}
                     </span>
                     <span className="badge">
@@ -323,68 +210,30 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '5px',
-                        backgroundColor: '#343a40',
-                        border: '1px solid #495057',
-                        borderRadius: 'var(--app-radius)',
-                        padding: '2px 6px',
-                        maxWidth: '125px',
-                      }}
-                    >
-                      <Search size={12} color="#adb5bd" style={{ flexShrink: 0 }} />
-                      <input
-                        type="text"
-                        placeholder="Search records..."
-                        value={tableSearch}
-                        onChange={(e) => {
-                          setTableSearch(e.target.value);
-                          setTablePage(1);
-                        }}
-                        style={{
-                          background: 'transparent',
-                          border: 'none',
-                          boxShadow: 'none',
-                          outline: 'none',
-                          fontSize: '11px',
-                          color: '#f8f9fa',
-                          width: '95px',
-                          padding: '1px 0',
-                        }}
-                      />
-                    </div>
+                  <div className="table-search-box">
+                    <Search size={12} color="#adb5bd" style={{ flexShrink: 0 }} />
+                    <input
+                      type="text"
+                      placeholder="Search records..."
+                      value={tableSearch}
+                      onChange={(e) =>
+                        setSearchState({
+                          query: e.target.value,
+                          page: 1,
+                          turnIndex: currentTurnIndex,
+                        })
+                      }
+                      className="table-search-input"
+                    />
                   </div>
                 </div>
 
-                {/* Table Grid */}
                 <div className="scroll-auto-hide" style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-                  <table
-                    style={{
-                      width: '100%',
-                      borderCollapse: 'collapse',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                    }}
-                  >
+                  <table className="data-table">
                     <thead>
-                      <tr style={{ backgroundColor: '#1c1f23', position: 'sticky', top: 0, zIndex: 10 }}>
+                      <tr>
                         {columns.map((col, idx) => (
-                          <th
-                            key={idx}
-                            title={col.label || col.name}
-                            style={{
-                              padding: '8px 12px',
-                              textAlign: 'left',
-                              color: '#ced4da',
-                              fontWeight: 600,
-                              borderBottom: '1px solid #495057',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
+                          <th key={idx} title={col.label || col.name}>
                             {col.label || col.name}
                           </th>
                         ))}
@@ -392,29 +241,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     </thead>
                     <tbody>
                       {paginatedRows.map((row, rIdx) => (
-                        <tr
-                          key={rIdx}
-                          style={{
-                            borderBottom: '1px solid rgba(73, 80, 87, 0.4)',
-                            backgroundColor: rIdx % 2 === 0 ? 'rgba(52, 58, 64, 0.2)' : 'transparent',
-                          }}
-                        >
+                        <tr key={rIdx}>
                           {columns.map((col, cIdx) => {
                             const rawVal = row[col.name];
-                            const strVal = rawVal !== undefined && rawVal !== null ? String(rawVal) : null;
+                            const strVal =
+                              rawVal !== undefined && rawVal !== null ? String(rawVal) : null;
                             return (
-                              <td
-                                key={cIdx}
-                                title={strVal !== null ? strVal : undefined}
-                                style={{
-                                  padding: '6px 12px',
-                                  color: '#dee2e6',
-                                  whiteSpace: 'nowrap',
-                                  maxWidth: '240px',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                }}
-                              >
+                              <td key={cIdx} title={strVal !== null ? strVal : undefined}>
                                 {strVal !== null ? strVal : <span style={{ color: '#6c757d' }}>null</span>}
                               </td>
                             );
@@ -425,33 +258,20 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                   </table>
                 </div>
 
-                {/* Table Pagination Bar */}
-                <div
-                  style={{
-                    padding: '6px 12px',
-                    borderTop: '1px solid rgba(73, 80, 87, 0.6)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    fontSize: '11px',
-                    color: '#adb5bd',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div className="table-pagination">
+                  <div className="chat-input-row" style={{ gap: '6px' }}>
                     <span>Rows per page:</span>
                     <select
                       value={rowsPerPage}
                       onChange={(e) => {
                         setRowsPerPage(Number(e.target.value));
-                        setTablePage(1);
+                        setSearchState({
+                          query: tableSearch,
+                          page: 1,
+                          turnIndex: currentTurnIndex,
+                        });
                       }}
-                      style={{
-                        padding: '1px 4px',
-                        fontSize: '11px',
-                        background: '#343a40',
-                        color: '#f8f9fa',
-                        border: '1px solid #495057',
-                      }}
+                      className="page-select"
                     >
                       <option value={10}>10</option>
                       <option value={15}>15</option>
@@ -460,21 +280,33 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     </select>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div className="chat-input-row">
                     <span>
                       Page {tablePage} of {totalPages}
                     </span>
                     <button
-                      onClick={() => setTablePage((p) => Math.max(1, p - 1))}
+                      onClick={() =>
+                        setSearchState({
+                          query: tableSearch,
+                          page: Math.max(1, tablePage - 1),
+                          turnIndex: currentTurnIndex,
+                        })
+                      }
                       disabled={tablePage <= 1}
-                      style={{ padding: '2px 6px', background: '#343a40', border: '1px solid #495057' }}
+                      className="page-btn"
                     >
                       Prev
                     </button>
                     <button
-                      onClick={() => setTablePage((p) => Math.min(totalPages, p + 1))}
+                      onClick={() =>
+                        setSearchState({
+                          query: tableSearch,
+                          page: Math.min(totalPages, tablePage + 1),
+                          turnIndex: currentTurnIndex,
+                        })
+                      }
                       disabled={tablePage >= totalPages}
-                      style={{ padding: '2px 6px', background: '#343a40', border: '1px solid #495057' }}
+                      className="page-btn"
                     >
                       Next
                     </button>
@@ -485,36 +317,16 @@ export const Workspace: React.FC<WorkspaceProps> = ({
           </div>
         )}
 
-        {/* ========================================================= */}
-        {/* TAB 2: VISUALIZATIONS */}
-        {/* ========================================================= */}
         {activeTab === 'plots' && (
-          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div className="tab-pane">
             {!hasPlots ? (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px dashed rgba(73, 80, 87, 0.7)',
-                  borderRadius: 'var(--app-radius)',
-                  padding: '32px',
-                  color: '#adb5bd',
-                  textAlign: 'center',
-                }}
-              >
-                <BarChart2 size={36} color="#6c757d" style={{ marginBottom: '8px' }} />
-                <span style={{ fontSize: '14px', fontWeight: 600, color: '#ced4da' }}>
-                  No interactive charts for this message
-                </span>
-                <span style={{ fontSize: '12px', color: '#6c757d', marginTop: '4px' }}>
-                  Ask for an interactive visualization, distribution, correlation, or clustering model plot.
-                </span>
-              </div>
+              <EmptyTabState
+                icon={<BarChart2 size={36} color="#6c757d" />}
+                title="No interactive charts for this message"
+                subtitle="Ask for an interactive visualization, distribution, correlation, or clustering model plot."
+              />
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="tab-stack">
                 {activeTurn?.chartsData.map((ch, idx) => (
                   <PlotlyChart
                     key={idx}
@@ -528,36 +340,16 @@ export const Workspace: React.FC<WorkspaceProps> = ({
           </div>
         )}
 
-        {/* ========================================================= */}
-        {/* TAB 3: CODE & SCRIPTS */}
-        {/* ========================================================= */}
         {activeTab === 'code' && (
-          <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div className="tab-pane">
             {!hasCode ? (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  border: '1px dashed rgba(73, 80, 87, 0.7)',
-                  borderRadius: 'var(--app-radius)',
-                  padding: '32px',
-                  color: '#adb5bd',
-                  textAlign: 'center',
-                }}
-              >
-                <Terminal size={36} color="#6c757d" style={{ marginBottom: '8px' }} />
-                <span style={{ fontSize: '14px', fontWeight: 600, color: '#ced4da' }}>
-                  No scripts or queries for this message
-                </span>
-                <span style={{ fontSize: '12px', color: '#6c757d', marginTop: '4px' }}>
-                  Code and SQL statements generated by agents appear here.
-                </span>
-              </div>
+              <EmptyTabState
+                icon={<Terminal size={36} color="#6c757d" />}
+                title="No scripts or queries for this message"
+                subtitle="Code and SQL statements generated by agents appear here."
+              />
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div className="tab-stack">
                 {activeTurn?.pythonScript && (
                   <CodeViewer
                     code={activeTurn.pythonScript}
@@ -565,7 +357,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     title={
                       activeTurn.metadata?.code_title ||
                       activeTurn.metadata?.task_description ||
-                      "Machine Learning Python Script"
+                      'Machine Learning Python Script'
                     }
                   />
                 )}
@@ -576,7 +368,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     title={
                       activeTurn.metadata?.sql_description ||
                       activeTurn.datasetData?.name ||
-                      "PostgreSQL Query Statement"
+                      'PostgreSQL Query Statement'
                     }
                   />
                 )}

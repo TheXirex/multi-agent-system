@@ -99,7 +99,6 @@ export function formatHumanReadableError(err: any): string {
     }
   }
 
-  // Parse if raw string is JSON like {"detail": "..."}
   if (raw && (raw.startsWith('{') || raw.startsWith('['))) {
     try {
       const parsed = JSON.parse(raw);
@@ -115,7 +114,7 @@ export function formatHumanReadableError(err: any): string {
         }
       }
     } catch {
-      // Continue with raw string
+      // Keep raw string if JSON parsing fails
     }
   }
 
@@ -126,20 +125,11 @@ export function formatHumanReadableError(err: any): string {
   return raw || 'An unexpected error occurred while processing your request. Please try again.';
 }
 
-export async function sendQuery(
-  query: string,
-  sessionId?: string,
-  attachments?: any[]
-): Promise<any> {
-  const payload: Record<string, any> = { query, session_id: sessionId };
-  if (attachments && attachments.length > 0) {
-    payload.attachments = attachments;
-  }
-
+export async function sendQuery(query: string, sessionId?: string): Promise<any> {
   const res = await fetch(`${API_BASE}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ query, session_id: sessionId }),
   });
 
   if (!res.ok) {
@@ -153,19 +143,13 @@ export async function sendQuery(
 export async function sendQueryStream(
   query: string,
   sessionId?: string,
-  attachments?: any[],
   onStatusUpdate?: (action: string) => void
 ): Promise<any> {
-  const payload: Record<string, any> = { query, session_id: sessionId };
-  if (attachments && attachments.length > 0) {
-    payload.attachments = attachments;
-  }
-
   try {
     const res = await fetch(`${API_BASE}/api/query/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ query, session_id: sessionId }),
     });
 
     if (!res.ok) {
@@ -227,13 +211,10 @@ export async function sendQueryStream(
     console.warn('Streaming failed, falling back to standard query:', err);
   }
 
-  return await sendQuery(query, sessionId, attachments);
+  return await sendQuery(query, sessionId);
 }
 
-export async function uploadFile(
-  file: File,
-  sessionId?: string
-): Promise<any> {
+export async function uploadFile(file: File, sessionId?: string): Promise<any> {
   const formData = new FormData();
   formData.append('file', file);
   if (sessionId) {
@@ -251,17 +232,6 @@ export async function uploadFile(
   }
 
   return await res.json();
-}
-
-export async function fetchDataset(datasetId: number): Promise<DatasetData | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/datasets/${datasetId}`);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (err) {
-    console.error(`Failed to fetch dataset ${datasetId}:`, err);
-    return null;
-  }
 }
 
 export async function fetchTable(tableName: string, sessionId?: string): Promise<DatasetData | null> {

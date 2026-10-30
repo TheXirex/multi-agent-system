@@ -3,18 +3,17 @@ export interface Session {
   title: string;
   created_at?: string;
   updated_at?: string;
+  message_count?: number;
+  last_message?: string | null;
 }
 
 export interface Attachment {
   filename: string;
-  content: string;
-  file_type?: string;
   size_str?: string;
+  tables?: string[];
 }
 
 export interface MessageMetadata {
-  dataset_id?: number | null;
-  dataset_ids?: number[];
   chart_id?: number | null;
   chart_ids?: number[];
   script_id?: number | null;
@@ -31,13 +30,12 @@ export interface MessageMetadata {
 }
 
 export interface Message {
-  id?: string;
+  id?: string | number;
   session_id?: string;
   role: 'user' | 'assistant';
   content: string;
   metadata?: MessageMetadata;
   created_at?: string;
-  // Hydrated artifacts for rendering
   turnIndex?: number;
   datasetData?: DatasetData | null;
   chartsData?: ChartData[];
@@ -52,12 +50,13 @@ export interface DatasetColumn {
 }
 
 export interface DatasetData {
-  id?: number;
+  id?: string;
   name?: string;
+  table_name?: string;
+  schema?: string;
+  row_count?: number;
   columns: DatasetColumn[];
   rows: Record<string, any>[];
-  total_rows?: number;
-  query?: string;
 }
 
 export interface ChartData {
@@ -71,6 +70,7 @@ export interface ScriptData {
   id?: number;
   script: string;
   language: string;
+  task_description?: string;
 }
 
 export interface TurnArtifacts {

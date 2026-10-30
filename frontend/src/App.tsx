@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
-import type { Message, Session, TurnArtifacts, ChartData } from './types';
+import type { Message, MessageMetadata, Session, TurnArtifacts, ChartData, DatasetData } from './types';
 import * as api from './services/api';
+import { formatFileSize } from './utils/formatters';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
@@ -23,6 +24,57 @@ function extractCodeBlock(text: string, lang: string): string | null {
   return text.substring(lineEndIdx + 1, endIdx).trim();
 }
 
+async function resolveTurnArtifacts(
+  content: string,
+  meta: MessageMetadata,
+  sessionId?: string | null
+): Promise<{
+  datasetData: DatasetData | null;
+  chartsData: ChartData[];
+  pythonScript: string | null;
+  sqlQuery: string | null;
+}> {
+  let datasetData: DatasetData | null = null;
+  if (meta.table_names && meta.table_names.length > 0) {
+    datasetData = await api.fetchTable(meta.table_names[0], sessionId || undefined);
+  }
+
+  const chartIds: number[] = meta.chart_ids || (meta.chart_id ? [meta.chart_id] : []);
+  const chartsData: ChartData[] = [];
+  for (const cid of chartIds) {
+    const ch = await api.fetchChart(cid);
+    if (ch) chartsData.push(ch);
+  }
+
+  let pythonScript: string | null = meta.code || null;
+  let sqlQuery: string | null = meta.sql_query || null;
+
+  const pythonScriptId =
+    meta.python_script_id || (meta.script_id && !meta.sql_script_id ? meta.script_id : null);
+  if (!pythonScript && pythonScriptId) {
+    const sc = await api.fetchScript(pythonScriptId);
+    if (sc && sc.script) {
+      if (sc.language === 'python') pythonScript = sc.script;
+      else if (sc.language === 'sql' && !sqlQuery) sqlQuery = sc.script;
+    }
+  }
+
+  const sqlScriptId =
+    meta.sql_script_id || (meta.script_id && meta.script_id !== pythonScriptId ? meta.script_id : null);
+  if (!sqlQuery && sqlScriptId) {
+    const sc = await api.fetchScript(sqlScriptId);
+    if (sc && sc.script) {
+      if (sc.language === 'sql') sqlQuery = sc.script;
+      else if (sc.language === 'python' && !pythonScript) pythonScript = sc.script;
+    }
+  }
+
+  if (!sqlQuery) sqlQuery = extractCodeBlock(content, 'sql');
+  if (!pythonScript) pythonScript = extractCodeBlock(content, 'python');
+
+  return { datasetData, chartsData, pythonScript, sqlQuery };
+}
+
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -34,7 +86,6 @@ export function App() {
   const [isBusy, setIsBusy] = useState(false);
   const [currentAction, setCurrentAction] = useState<string | null>(null);
 
-  // Scroll to assistant message card in chat
   const handleScrollToMessage = useCallback((turnIndex: number) => {
     if (!turnIndex) return;
     const el = document.getElementById(`chat-turn-${turnIndex}`);
@@ -47,7 +98,6 @@ export function App() {
     }
   }, []);
 
-  // Load a session's messages and hydrate artifacts
   const loadSession = useCallback(async (sessionId: string) => {
     setIsBusy(true);
     setCurrentAction('Loading session history...');
@@ -69,7 +119,7 @@ export function App() {
     for (const msg of rawMessages) {
       const role = msg.role || 'user';
       const content = msg.content || '';
-      const meta = msg.metadata || {};
+      const meta: MessageMetadata = msg.metadata || {};
 
       if (role === 'user') {
         lastUserQuery = content;
@@ -84,50 +134,13 @@ export function App() {
       } else {
         assistantTurnCounter += 1;
         const currentTurn = assistantTurnCounter;
+        const { datasetData, chartsData, pythonScript, sqlQuery } = await resolveTurnArtifacts(
+          content,
+          meta,
+          sessionId
+        );
 
-        // Fetch table data
-        let datasetData = null;
-        if (meta.table_names && meta.table_names.length > 0) {
-          datasetData = await api.fetchTable(meta.table_names[0], sessionId);
-        } else if (meta.dataset_id) {
-          datasetData = await api.fetchDataset(meta.dataset_id);
-        }
-
-        // Fetch charts
-        const chartIds: number[] = meta.chart_ids || (meta.chart_id ? [meta.chart_id] : []);
-        const chartsData: ChartData[] = [];
-        for (const cid of chartIds) {
-          const ch = await api.fetchChart(cid);
-          if (ch) chartsData.push(ch);
-        }
-
-        // Resolve Python script and SQL query
-        let pythonScript: string | null = meta.code || null;
-        let sqlQuery: string | null = meta.sql_query || datasetData?.query || null;
-
-        const pythonScriptId = meta.python_script_id || (meta.script_id && !meta.sql_script_id ? meta.script_id : null);
-        if (!pythonScript && pythonScriptId) {
-          const sc = await api.fetchScript(pythonScriptId);
-          if (sc && sc.script) {
-            if (sc.language === 'python') pythonScript = sc.script;
-            else if (sc.language === 'sql' && !sqlQuery) sqlQuery = sc.script;
-          }
-        }
-
-        const sqlScriptId = meta.sql_script_id || (meta.script_id && meta.script_id !== pythonScriptId ? meta.script_id : null);
-        if (!sqlQuery && sqlScriptId) {
-          const sc = await api.fetchScript(sqlScriptId);
-          if (sc && sc.script) {
-            if (sc.language === 'sql') sqlQuery = sc.script;
-            else if (sc.language === 'python' && !pythonScript) pythonScript = sc.script;
-          }
-        }
-
-        // Fallbacks via markdown parsing
-        if (!sqlQuery) sqlQuery = extractCodeBlock(content, 'sql');
-        if (!pythonScript) pythonScript = extractCodeBlock(content, 'python');
-
-        const messageObj: Message = {
+        hydratedMessages.push({
           id: msg.id,
           session_id: sessionId,
           role: 'assistant',
@@ -139,10 +152,9 @@ export function App() {
           chartsData,
           pythonScript,
           sqlQuery,
-        };
-        hydratedMessages.push(messageObj);
+        });
 
-        const turnObj: TurnArtifacts = {
+        loadedTurns.push({
           turnIndex: currentTurn,
           totalTurns: 0,
           userQuery: lastUserQuery,
@@ -152,12 +164,10 @@ export function App() {
           chartsData,
           pythonScript,
           sqlQuery,
-        };
-        loadedTurns.push(turnObj);
+        });
       }
     }
 
-    // Update totalTurns count
     for (const t of loadedTurns) {
       t.totalTurns = loadedTurns.length;
     }
@@ -169,7 +179,6 @@ export function App() {
     setCurrentAction(null);
   }, []);
 
-  // Initial load: fetch sessions
   useEffect(() => {
     async function init() {
       const sessList = await api.fetchSessions();
@@ -226,7 +235,6 @@ export function App() {
     setIsBusy(true);
 
     try {
-      // 1. File Upload Flow
       if (attachedFile) {
         setCurrentAction('Ingesting dataset...');
         const userMsg: Message = {
@@ -236,8 +244,7 @@ export function App() {
             attachments: [
               {
                 filename: attachedFile.name,
-                content: '',
-                size_str: `${(attachedFile.size / 1024).toFixed(1)} KB`,
+                size_str: formatFileSize(attachedFile.size),
               },
             ],
           },
@@ -245,14 +252,16 @@ export function App() {
         setMessages((prev) => [...prev, userMsg]);
 
         const uploadRes = await api.uploadFile(attachedFile, currentSessionId || undefined);
-        const tableNames: string[] = uploadRes.table_names || (uploadRes.table_name ? [uploadRes.table_name] : []);
+        const tableNames: string[] =
+          uploadRes.table_names || (uploadRes.table_name ? [uploadRes.table_name] : []);
         const msgText = uploadRes.message || `File \`${attachedFile.name}\` uploaded and ingested.`;
 
-        let dsData = null;
+        let dsData: DatasetData | null = null;
         if (tableNames.length > 0) {
-          dsData = await api.fetchTable(tableNames[0], uploadRes.session_id || currentSessionId || undefined);
-        } else if (uploadRes.primary_dataset_id) {
-          dsData = await api.fetchDataset(uploadRes.primary_dataset_id);
+          dsData = await api.fetchTable(
+            tableNames[0],
+            uploadRes.session_id || currentSessionId || undefined
+          );
         }
 
         const newTurnIdx = turns.length + 1;
@@ -281,9 +290,7 @@ export function App() {
           return updated;
         });
         setCurrentTurnIndex(newTurnIdx);
-      }
-      // 2. Normal Query Flow
-      else {
+      } else {
         setCurrentAction('Planning execution steps...');
         const userMsg: Message = {
           role: 'user',
@@ -294,50 +301,16 @@ export function App() {
         const queryRes = await api.sendQueryStream(
           text,
           currentSessionId || undefined,
-          undefined,
           (action) => setCurrentAction(action)
         );
         const responseText = queryRes.response || 'No response generated.';
-        const meta = queryRes.metadata || {};
+        const meta: MessageMetadata = queryRes.metadata || {};
 
-        let dsData = null;
-        if (meta.table_names && meta.table_names.length > 0) {
-          dsData = await api.fetchTable(meta.table_names[0], queryRes.session_id || currentSessionId || undefined);
-        } else if (meta.dataset_id) {
-          dsData = await api.fetchDataset(meta.dataset_id);
-        }
-
-        const chartIds: number[] = meta.chart_ids || (meta.chart_id ? [meta.chart_id] : []);
-        const chartsData: ChartData[] = [];
-        for (const cid of chartIds) {
-          const ch = await api.fetchChart(cid);
-          if (ch) chartsData.push(ch);
-        }
-
-        // Resolve Python script and SQL query
-        let pythonScript: string | null = meta.code || null;
-        let sqlQuery: string | null = meta.sql_query || dsData?.query || null;
-
-        const pythonScriptId = meta.python_script_id || (meta.script_id && !meta.sql_script_id ? meta.script_id : null);
-        if (!pythonScript && pythonScriptId) {
-          const sc = await api.fetchScript(pythonScriptId);
-          if (sc && sc.script) {
-            if (sc.language === 'python') pythonScript = sc.script;
-            else if (sc.language === 'sql' && !sqlQuery) sqlQuery = sc.script;
-          }
-        }
-
-        const sqlScriptId = meta.sql_script_id || (meta.script_id && meta.script_id !== pythonScriptId ? meta.script_id : null);
-        if (!sqlQuery && sqlScriptId) {
-          const sc = await api.fetchScript(sqlScriptId);
-          if (sc && sc.script) {
-            if (sc.language === 'sql') sqlQuery = sc.script;
-            else if (sc.language === 'python' && !pythonScript) pythonScript = sc.script;
-          }
-        }
-
-        if (!sqlQuery) sqlQuery = extractCodeBlock(responseText, 'sql');
-        if (!pythonScript) pythonScript = extractCodeBlock(responseText, 'python');
+        const { datasetData, chartsData, pythonScript, sqlQuery } = await resolveTurnArtifacts(
+          responseText,
+          meta,
+          queryRes.session_id || currentSessionId
+        );
 
         const newTurnIdx = turns.length + 1;
         const assistantMsg: Message = {
@@ -345,7 +318,7 @@ export function App() {
           content: responseText,
           metadata: meta,
           turnIndex: newTurnIdx,
-          datasetData: dsData,
+          datasetData,
           chartsData,
           pythonScript,
           sqlQuery,
@@ -358,7 +331,7 @@ export function App() {
           userQuery: text,
           messageContent: responseText,
           metadata: meta,
-          datasetData: dsData,
+          datasetData,
           chartsData,
           pythonScript,
           sqlQuery,
@@ -372,17 +345,18 @@ export function App() {
         setCurrentTurnIndex(newTurnIdx);
       }
 
-      // Refresh session list to get updated title
       const updatedSessions = await api.fetchSessions();
       setSessions(updatedSessions);
     } catch (err: any) {
       console.error('Query execution error:', err);
       const cleanError = api.formatHumanReadableError(err);
-      const errorMsg: Message = {
-        role: 'assistant',
-        content: cleanError,
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: cleanError,
+        },
+      ]);
     } finally {
       setIsBusy(false);
       setCurrentAction(null);

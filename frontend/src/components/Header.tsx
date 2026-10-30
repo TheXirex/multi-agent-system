@@ -6,52 +6,21 @@ interface HeaderProps {
   onToggleSidebar: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
-  isBusy,
-  onToggleSidebar,
-}) => {
-  return (
-    <header className="app-header">
-      {/* Left section: Sidebar toggle & Studio Title */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <button
-          onClick={onToggleSidebar}
-          aria-label="Toggle session history sidebar"
-          style={{
-            padding: '6px',
-            color: '#ced4da',
-            background: '#343a40',
-            border: '1px solid #495057',
-            cursor: 'pointer',
-          }}
-        >
-          <PanelLeft size={16} />
-        </button>
+export const Header: React.FC<HeaderProps> = ({ isBusy, onToggleSidebar }) => (
+  <header className="app-header">
+    <div className="header-left">
+      <button
+        onClick={onToggleSidebar}
+        aria-label="Toggle session history sidebar"
+        className="header-toggle-btn"
+      >
+        <PanelLeft size={16} />
+      </button>
+      <span className="header-title">Multi-Agent Studio</span>
+    </div>
 
-        <div>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: '#f8f9fa' }}>
-            Multi-Agent Studio
-          </span>
-        </div>
-      </div>
-
-      {/* Right section: Activity status indicator */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        {isBusy && (
-          <div
-            style={{
-              width: '12px',
-              height: '12px',
-              borderRadius: '50%',
-              border: '2px solid #adb5bd',
-              borderTopColor: 'transparent',
-              animation: 'spin 0.8s linear infinite',
-              marginLeft: '6px',
-            }}
-            title="Processing..."
-          />
-        )}
-      </div>
-    </header>
-  );
-};
+    <div className="header-right">
+      {isBusy && <div className="spinner" title="Processing..." />}
+    </div>
+  </header>
+);
