@@ -1,5 +1,4 @@
 from datetime import datetime
-import json
 import logging
 from typing import Any, Dict, List, Optional
 import uuid
@@ -7,8 +6,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
-from backend.database import get_db
-from shared.db import drop_session_replica, ensure_session_replica
+from backend.database import get_db, parse_json_metadata
 from backend.schemas import (
     ChatMessageItem,
     CreateSessionRequest,
@@ -16,6 +14,7 @@ from backend.schemas import (
     SessionSummary,
     UpdateSessionRequest,
 )
+from shared.db import drop_session_replica, ensure_session_replica
 
 logger = logging.getLogger("backend.routes.sessions")
 
@@ -25,20 +24,22 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 @router.get("", response_model=List[SessionSummary])
 @router.get("/", response_model=List[SessionSummary])
 async def list_sessions() -> List[SessionSummary]:
-    """
-    Returns list of all chat sessions ordered by updated_at DESC.
-    """
+    """Returns all chat sessions ordered by most recently updated."""
     engine = get_db()
     with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT s.id, s.title, s.created_at, s.updated_at,
-                   COUNT(m.id) as message_count,
-                   (SELECT content FROM internal.chat_messages WHERE session_id = s.id ORDER BY id DESC LIMIT 1) as last_msg
-            FROM internal.chat_sessions s
-            LEFT JOIN internal.chat_messages m ON s.id = m.session_id
-            GROUP BY s.id, s.title, s.created_at, s.updated_at
-            ORDER BY s.updated_at DESC
-        """)).fetchall()
+        rows = conn.execute(
+            text(
+                """
+                SELECT s.id, s.title, s.created_at, s.updated_at,
+                       COUNT(m.id) AS message_count,
+                       (SELECT content FROM internal.chat_messages WHERE session_id = s.id ORDER BY id DESC LIMIT 1) AS last_msg
+                FROM internal.chat_sessions s
+                LEFT JOIN internal.chat_messages m ON s.id = m.session_id
+                GROUP BY s.id, s.title, s.created_at, s.updated_at
+                ORDER BY s.updated_at DESC
+                """
+            )
+        ).fetchall()
 
     return [
         SessionSummary(
@@ -56,16 +57,17 @@ async def list_sessions() -> List[SessionSummary]:
 @router.post("", response_model=SessionSummary)
 @router.post("/", response_model=SessionSummary)
 async def create_session(req: Optional[CreateSessionRequest] = None) -> SessionSummary:
-    """
-    Creates a new chat session in PostgreSQL.
-    """
+    """Creates a new chat session and initializes its PostgreSQL schema replica."""
     engine = get_db()
     new_id = str(uuid.uuid4())
     title = (req.title if req and req.title else "New Chat").strip() or "New Chat"
     now = datetime.now()
     with engine.begin() as conn:
         conn.execute(
-            text("INSERT INTO internal.chat_sessions (id, title, created_at, updated_at) VALUES (:id, :title, :now, :now)"),
+            text(
+                "INSERT INTO internal.chat_sessions (id, title, created_at, updated_at) "
+                "VALUES (:id, :title, :now, :now)"
+            ),
             {"id": new_id, "title": title, "now": now},
         )
     ensure_session_replica(engine, new_id)
@@ -81,9 +83,7 @@ async def create_session(req: Optional[CreateSessionRequest] = None) -> SessionS
 
 @router.get("/{session_id}", response_model=SessionDetail)
 async def get_session(session_id: str) -> SessionDetail:
-    """
-    Retrieves full details and message history of a chat session.
-    """
+    """Retrieves full metadata and ordered message history for a chat session."""
     engine = get_db()
     with engine.connect() as conn:
         s_row = conn.execute(
@@ -95,31 +95,24 @@ async def get_session(session_id: str) -> SessionDetail:
             raise HTTPException(status_code=404, detail="Session not found")
 
         m_rows = conn.execute(
-            text("SELECT id, session_id, role, content, metadata, created_at FROM internal.chat_messages WHERE session_id = :id ORDER BY id ASC"),
+            text(
+                "SELECT id, session_id, role, content, metadata, created_at "
+                "FROM internal.chat_messages WHERE session_id = :id ORDER BY id ASC"
+            ),
             {"id": session_id},
         ).fetchall()
 
-    messages: List[ChatMessageItem] = []
-    for mr in m_rows:
-        meta_val = mr[4]
-        if isinstance(meta_val, str):
-            try:
-                meta_val = json.loads(meta_val)
-            except Exception:
-                meta_val = {}
-        elif not isinstance(meta_val, dict):
-            meta_val = {}
-
-        messages.append(
-            ChatMessageItem(
-                id=mr[0],
-                session_id=str(mr[1]),
-                role=str(mr[2]),
-                content=str(mr[3]),
-                metadata=meta_val,
-                created_at=str(mr[5]),
-            )
+    messages = [
+        ChatMessageItem(
+            id=mr[0],
+            session_id=str(mr[1]),
+            role=str(mr[2]),
+            content=str(mr[3]),
+            metadata=parse_json_metadata(mr[4]),
+            created_at=str(mr[5]),
         )
+        for mr in m_rows
+    ]
 
     return SessionDetail(
         id=str(s_row[0]),
@@ -132,15 +125,19 @@ async def get_session(session_id: str) -> SessionDetail:
 
 @router.delete("/{session_id}")
 async def delete_session(session_id: str) -> Dict[str, Any]:
-    """
-    Deletes a session, associated messages, change history, and drops its dedicated schema replica.
-    """
+    """Deletes a session, its artifacts, change history, and dedicated schema replica."""
     engine = get_db()
-    # 1. Drop session schema replica
     drop_session_replica(engine, session_id)
 
-    # 2. Clean session records in internal tables
     with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM internal.generated_charts WHERE session_id = :id"),
+            {"id": session_id},
+        )
+        conn.execute(
+            text("DELETE FROM internal.generated_scripts WHERE session_id = :id"),
+            {"id": session_id},
+        )
         conn.execute(
             text("DELETE FROM internal.change_history WHERE session_id = :id"),
             {"id": session_id},
@@ -154,9 +151,7 @@ async def delete_session(session_id: str) -> Dict[str, Any]:
 
 @router.patch("/{session_id}")
 async def update_session_title(session_id: str, req: UpdateSessionRequest) -> Dict[str, Any]:
-    """
-    Renames a chat session title in PostgreSQL.
-    """
+    """Updates the title of an existing chat session."""
     new_title = req.title.strip()
     if not new_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")

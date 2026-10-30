@@ -1,14 +1,13 @@
-"""
-Main execution entrypoint for running the backend API service via `python -m backend`.
-"""
 import os
+
+from dotenv import load_dotenv
 import uvicorn
+
+load_dotenv()
 
 
 def main() -> None:
-    """
-    Runs the AI FastAPI backend service using uvicorn on the configured host and port.
-    """
+    """Runs the FastAPI backend gateway service using Uvicorn."""
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run("backend.app:app", host=host, port=port, reload=False)
