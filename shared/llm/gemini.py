@@ -27,13 +27,13 @@ class GeminiLLM(BaseLLM):
         if not resolved_key:
             raise ValueError("LLM API key must be provided or set in LLM_API_KEY environment variable.")
 
-        self.model_name = model_name or os.getenv("LLM_MODEL", "gemini-3.8-flash")
+        self.model_name = model_name or os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
         self.temperature = temperature
         self.chat_model = ChatGoogleGenerativeAI(
             model=self.model_name,
             google_api_key=resolved_key,
             temperature=self.temperature,
-            max_retries=6,
+            max_retries=2,
         )
 
     def get_chat_model(self) -> BaseChatModel:

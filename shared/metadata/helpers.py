@@ -136,7 +136,7 @@ def resolve_tool_arguments(
 
     # 1. Inject session_id if absent
     effective_session_id = session_id or active_meta.get("session_id")
-    if effective_session_id and "session_id" not in step_args:
+    if effective_session_id:
         step_args["session_id"] = effective_session_id
 
     # 2. Inject dataset_ids for ML analysis if available in session

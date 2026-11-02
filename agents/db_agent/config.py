@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     db_password: str = os.getenv("DB_PASSWORD", "postgres")
 
     llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")
-    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.8-flash")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
     @property

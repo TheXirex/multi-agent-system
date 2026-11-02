@@ -58,6 +58,20 @@ def ensure_session_replica(engine: Engine, session_id: str) -> str:
                 conn.execute(
                     text(f'INSERT INTO "{schema_name}"."{tbl}" SELECT * FROM public."{tbl}" ON CONFLICT DO NOTHING')
                 )
+                seq_name = conn.execute(
+                    text("SELECT pg_get_serial_sequence(:tbl_ref, 'id')"),
+                    {"tbl_ref": f"public.{tbl}"},
+                ).scalar()
+                if seq_name:
+                    conn.execute(
+                        text(
+                            f"SELECT setval(:seq, GREATEST(COALESCE((SELECT MAX(id) FROM \"{schema_name}\".\"{tbl}\"), 1), "
+                            f"(SELECT last_value FROM {seq_name})))"
+                        ),
+                        {"seq": seq_name},
+                    )
+                conn.execute(text("SELECT 1")
+                )
             except Exception as ex:
                 logger.warning(f"Error cloning baseline table '{tbl}' into '{schema_name}': {ex}")
 

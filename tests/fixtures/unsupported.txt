@@ -1,0 +1,2 @@
+This is a plain text file without tabular formatting. Ingestion must reject this file format with a descriptive error.
+

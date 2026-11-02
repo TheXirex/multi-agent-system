@@ -62,6 +62,12 @@ def _load_session_history(
         meta_val = parse_json_metadata(row[2])
         if meta_val.get("table_names"):
             active_metadata["table_names"] = meta_val["table_names"]
+        if meta_val.get("dataset_id"):
+            active_metadata["dataset_id"] = meta_val["dataset_id"]
+        if meta_val.get("dataset_ids"):
+            active_metadata["dataset_ids"] = meta_val["dataset_ids"]
+        if meta_val.get("sql_query"):
+            active_metadata["sql_query"] = meta_val["sql_query"]
 
     return history, active_metadata
 
@@ -122,7 +128,10 @@ def _save_assistant_response_and_update_title(
         if first_count == 1:
             title_sample = truncate_to_nearest_space(effective_query, limit=45)
             conn.execute(
-                text("UPDATE internal.chat_sessions SET title = :title, updated_at = :now WHERE id = :sid"),
+                text(
+                    "UPDATE internal.chat_sessions SET title = :title, updated_at = :now "
+                    "WHERE id = :sid AND title = 'New Chat'"
+                ),
                 {"sid": session_id, "title": title_sample, "now": now_asst},
             )
 

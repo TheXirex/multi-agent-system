@@ -741,7 +741,7 @@ class OrchestratorAgent:
                         output={"final_response": refusal_res.get("final_response", ""), "refusal": True},
                         metadata={"final_metadata": final_meta},
                     )
-                    flush_langfuse()
+
                     yield {
                         "type": "result",
                         "response": refusal_res.get("final_response", ""),
@@ -763,7 +763,7 @@ class OrchestratorAgent:
                         output={"final_response": direct_res.get("final_response", ""), "direct": True},
                         metadata={"final_metadata": final_meta},
                     )
-                    flush_langfuse()
+
                     yield {
                         "type": "result",
                         "response": direct_res.get("final_response", ""),
@@ -824,7 +824,7 @@ class OrchestratorAgent:
                         output={"final_response": clarification_response, "clarification": True},
                         metadata={"final_metadata": consolidated_metadata},
                     )
-                    flush_langfuse()
+
                     yield {
                         "type": "result",
                         "response": clarification_response,
@@ -848,8 +848,6 @@ class OrchestratorAgent:
                     output={"final_response": final_response_text},
                     metadata={"final_metadata": final_meta},
                 )
-                flush_langfuse()
-
                 yield {
                     "type": "result",
                     "response": final_response_text,
@@ -860,6 +858,7 @@ class OrchestratorAgent:
             finally:
                 _current_mcp_session.reset(token)
                 _current_trace.reset(trace_token)
+                flush_langfuse()
 
 
 def create_orchestrator(

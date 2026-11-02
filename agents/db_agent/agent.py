@@ -251,7 +251,8 @@ class DBAgent:
             )
             queried_tables = [t for t in all_tables if t.lower() in clean_tokens]
 
-        resolved_table_names = queried_tables or ([table_name] if table_name.lower() in all_tables_lower else [])
+        resolved_table_names = queried_tables or ([table_name] if table_name and table_name.lower() in all_tables_lower else [])
+        real_table_name = table_name if (table_name and table_name.lower() in all_tables_lower) else (resolved_table_names[0] if resolved_table_names else None)
 
         return {
             "response": final_state.get("response", ""),
@@ -260,7 +261,7 @@ class DBAgent:
                 script_id=script_id,
                 sql_script_id=script_id,
                 sql_query=sql_query,
-                table_name=table_name,
+                table_name=real_table_name,
                 table_names=resolved_table_names,
                 sql_description=sql_description,
             ),

@@ -106,7 +106,7 @@ def register_agent_tools(server: MCPServer, agent: DBAgent) -> None:
             "tables": tables,
             "schema": agent.inspector.get_schema_summary(session_id=session_id),
             "metadata": {
-                "table_names": tables,
+                "schema_tables": tables,
             },
         }
 

@@ -18,7 +18,7 @@ class MLAgentSettings(BaseSettings):
     )
 
     llm_provider: str = os.getenv("LLM_PROVIDER", "gemini")
-    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.8-flash")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
 
     ml_venv_python: Path = Path(os.getenv("ML_VENV_PYTHON", "/app/.ml_venv/bin/python"))

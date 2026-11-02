@@ -1,0 +1,342 @@
+# Evaluation Test Scenarios for Multi-Agent System
+# Each scenario represents a coherent, multi-turn user session.
+# Sessions are persisted in the backend database and tracked in Langfuse.
+
+version: "1.0"
+metadata:
+  suite_name: "Evaluation"
+  dataset_name: "eval_dataset"
+  target_url: "http://localhost:8000"
+  langfuse_host: "http://localhost:3000"
+
+scenarios:
+  - id: "onboarding"
+    title: "Onboarding & Direct"
+    description: "Conversational answers, capabilities, schema, and refusals."
+    turns:
+      - turn_id: 1
+        user_query: "Hello! Who are you and what is your role in this system?"
+        expected_route: "direct"
+        expected_tools: []
+        expected_metadata_keys: []
+        assertions:
+          - type: "not_empty"
+          - type: "no_sql"
+
+      - turn_id: 2
+        user_query: "What analytical tasks, database operations, and machine learning capabilities do you support?"
+        expected_route: "direct"
+        expected_tools: []
+        expected_metadata_keys: []
+        assertions:
+          - type: "not_empty"
+          - type: "no_sql"
+
+      - turn_id: 3
+        user_query: "What tables and datasets are available in the database?"
+        expected_route: "tools"
+        expected_tools:
+          - "get_database_schema"
+        expected_metadata_keys:
+          - "schema_tables"
+        assertions:
+          - type: "contains_tables"
+            tables: ["categories", "orders", "product_reviews", "products", "users"]
+          - type: "forbidden_phrases"
+            phrases: ["public schema", "information_schema"]
+
+      - turn_id: 4
+        user_query: "Explain in simple terms the difference between linear regression and random forest."
+        expected_route: "direct"
+        expected_tools: []
+        expected_metadata_keys: []
+        assertions:
+          - type: "not_empty"
+          - type: "no_sql"
+
+      - turn_id: 5
+        user_query: "Write a recipe for homemade Italian pepperoni pizza."
+        expected_route: "refusal"
+        expected_tools: []
+        expected_metadata_keys:
+          - "guardrail_triggered"
+        assertions:
+          - type: "refusal_polite"
+
+  - id: "sql_analytics"
+    title: "SQL Analytics"
+    description: "Single-table queries, multi-table joins, and aggregations."
+    turns:
+      - turn_id: 1
+        user_query: "Which 5 products have the highest discounted_price in the products table? List their names and prices."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "sql_script_id"
+          - "table_name"
+        assertions:
+          - type: "sql_syntax_valid"
+          - type: "target_table"
+            name: "products"
+
+      - turn_id: 2
+        user_query: "Show 5 orders from the orders table along with the purchased product name from products and customer name from users."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "sql_script_id"
+          - "table_names"
+        assertions:
+          - type: "sql_contains_join"
+
+      - turn_id: 3
+        user_query: "How many total records in the product_reviews table have a rating of 5?"
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "sql_script_id"
+          - "table_name"
+        assertions:
+          - type: "sql_syntax_valid"
+
+  - id: "ml_analysis"
+    title: "ML Analysis"
+    description: "Correlation heatmaps, predictive regression, clustering, and chart refinements."
+    turns:
+      - turn_id: 1
+        user_query: "Analyze the mutual correlation between numeric metrics discounted_price, actual_price, discount_percentage, and rating in the products table and generate a heatmap."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+          - "run_ml_analysis"
+        expected_metadata_keys:
+          - "chart_id"
+          - "python_script_id"
+        assertions:
+          - type: "chart_generated"
+
+      - turn_id: 2
+        user_query: "Segment products from the products table into 3 clusters based on prices, discounts, and ratings using K-Means and plot the cluster scatter diagram."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+          - "run_ml_analysis"
+        expected_metadata_keys:
+          - "chart_id"
+          - "python_script_id"
+        assertions:
+          - type: "chart_generated"
+
+      - turn_id: 3
+        user_query: "Build a regression model to predict total_amount in the orders table based on unit_price and quantity. Display R2 and MAE metrics."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+          - "run_ml_analysis"
+        expected_metadata_keys:
+          - "python_script_id"
+          - "code"
+        assertions:
+          - type: "ml_metrics_present"
+            metrics: ["MAE"]
+
+      - turn_id: 4
+        user_query: "Modify the previous analysis on this dataset: generate a bar chart showing the distribution of orders across order statuses."
+        expected_route: "tools"
+        expected_tools:
+          - "run_ml_analysis"
+        expected_metadata_keys:
+          - "chart_id"
+          - "python_script_id"
+        assertions:
+          - type: "chart_generated"
+
+  - id: "db_mutations"
+    title: "DB Mutations & Rollback"
+    description: "DML insert, verification, safety clarification, and rollback."
+    turns:
+      - turn_id: 1
+        user_query: "Insert a new record into the categories table: name='Smart Electronics', main_category='Electronics', sub_category='Wearables', leaf_category='Smartwatches', category_path='Electronics|Wearables|Smartwatches'."
+        expected_route: "tools"
+        expected_tools:
+          - "modify_database_table"
+        expected_metadata_keys:
+          - "change_id"
+          - "table_name"
+        assertions:
+          - type: "mutation_recorded"
+
+      - turn_id: 2
+        user_query: "Find the record with name 'Smart Electronics' in the categories table."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+        assertions:
+          - type: "record_found"
+            text: "Smart Electronics"
+
+      - turn_id: 3
+        user_query: "Delete some unnecessary orders from the orders table."
+        expected_route: "clarification"
+        expected_tools:
+          - "modify_database_table"
+        expected_metadata_keys:
+          - "status"
+          - "questions"
+        assertions:
+          - type: "clarification_requested"
+
+      - turn_id: 4
+        user_query: "Rollback the addition of the new category 'Smart Electronics' and restore the previous database state."
+        expected_route: "tools"
+        expected_tools:
+          - "rollback_database_change"
+        expected_metadata_keys:
+          - "reverted_change_id"
+          - "table_name"
+        assertions:
+          - type: "rollback_successful"
+
+      - turn_id: 5
+        user_query: "Check in the categories table how many records currently have the name 'Smart Electronics'."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+        assertions:
+          - type: "not_empty"
+
+  - id: "robustness"
+    title: "Robustness & Isolation"
+    description: "Missing column handling and session replica isolation."
+    turns:
+      - turn_id: 1
+        user_query: "Find a user in the users table where user_age = 25."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+        assertions:
+          - type: "not_empty"
+
+      - turn_id: 2
+        user_query: "Check the categories table to see how many records have the name 'Smart Electronics'."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+        assertions:
+          - type: "not_empty"
+
+  - id: "data_ingestion"
+    title: "Data Ingestion"
+    description: "Tabular CSV and Excel (.xlsx) dataset upload, multi-sheet partitioning, analytical queries, and error guardrails."
+    turns:
+      - turn_id: 1
+        action: "upload"
+        file_path: "tests/fixtures/inventory_items.csv"
+        expected_status: "success"
+        assertions:
+          - type: "upload_success"
+            table: "inventory_items"
+
+      - turn_id: 2
+        user_query: "Show 3 products from the uploaded inventory_items table with their prices."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "table_name"
+        assertions:
+          - type: "sql_syntax_valid"
+          - type: "target_table"
+            name: "inventory_items"
+
+      - turn_id: 3
+        user_query: "Generate a bar chart showing the stock count for each product in the uploaded inventory_items table."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+          - "run_ml_analysis"
+        expected_metadata_keys:
+          - "chart_id"
+        assertions:
+          - type: "chart_generated"
+
+      - turn_id: 4
+        action: "upload"
+        file_path: "tests/fixtures/simple_catalog.xlsx"
+        expected_status: "success"
+        assertions:
+          - type: "upload_success"
+            table: "simple_catalog_items"
+
+      - turn_id: 5
+        user_query: "How many items in the uploaded simple_catalog_items table have a price under 100?"
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "table_name"
+        assertions:
+          - type: "sql_syntax_valid"
+          - type: "target_table"
+            name: "simple_catalog_items"
+
+      - turn_id: 6
+        action: "upload"
+        file_path: "tests/fixtures/multi_sheet_data.xlsx"
+        expected_status: "success"
+        assertions:
+          - type: "upload_success"
+            table: "multi_sheet_data_sales"
+
+      - turn_id: 7
+        user_query: "Show the sales reps from the uploaded multi_sheet_data_sales table who achieved their quota."
+        expected_route: "tools"
+        expected_tools:
+          - "query_and_analyze_database"
+        expected_metadata_keys:
+          - "sql_query"
+          - "table_name"
+        assertions:
+          - type: "sql_syntax_valid"
+          - type: "target_table"
+            name: "multi_sheet_data_sales"
+
+      - turn_id: 8
+        action: "upload"
+        file_path: "tests/fixtures/corrupted.xlsx"
+        expected_status: "error"
+        assertions:
+          - type: "upload_error_contains"
+            text: "corrupted"
+
+      - turn_id: 9
+        action: "upload"
+        file_path: "tests/fixtures/empty.csv"
+        expected_status: "error"
+        assertions:
+          - type: "upload_error_contains"
+            text: "empty"
+
+      - turn_id: 10
+        action: "upload"
+        file_path: "tests/fixtures/unsupported.txt"
+        expected_status: "error"
+        assertions:
+          - type: "upload_error_contains"
+            text: "unsupported"

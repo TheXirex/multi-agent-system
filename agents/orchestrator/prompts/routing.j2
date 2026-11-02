@@ -62,12 +62,12 @@ Classification Guidelines:
      * Database Undo / Rollback Requests:
        - If the user asks to undo, revert, or rollback previous database changes (e.g. "undo", "revert changes", "rollback", "restore deleted record"):
          Plan Step 1 with tool `rollback_database_change`.
-     * Simple Database Lookups:
-       - If the user asks for narrow factual lookups, single record retrieval, or simple raw table exports without analytical exploration (e.g. "Find product with id 10", "Show first 5 users", "What is the price of item X?"):
+     * Database Structure & Available Tables / Datasets:
+       - If the user asks what tables, datasets, columns, or data are available in the database (e.g. "What tables and datasets are available in the database?", "What tables are in the database?", "Show available datasets", "Explain database schema"):
+         Plan Step 1 with tool `get_database_schema`. This provides the complete database structure, tables, and column definitions.
+     * Specific Database Queries & Lookups:
+       - If the user asks for narrow factual lookups, single record retrieval, or queries on specific tables (e.g. "Find product with id 10", "Show first 5 users", "What is the price of item X?"):
          Plan Step 1 with tool `query_and_analyze_database`.
-     * Database Schema Inspection:
-       - If the user explicitly asks to view available tables or database structure:
-         Plan Step 1 with tool `get_database_schema`.
 
 4. Handling follow-up, clarification, or refinement requests:
    - When the user explicitly refers to or asks to modify previously generated artifacts (e.g., "Change the previous chart to a bar chart", "Now predict churn instead", "Filter by age > 30"):

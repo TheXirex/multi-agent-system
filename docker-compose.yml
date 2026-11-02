@@ -34,7 +34,7 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
-      LLM_MODEL: ${LLM_MODEL:-gemini-3.8-flash}
+      LLM_MODEL: ${LLM_MODEL:-gemini-flash-lite-latest}
       LLM_API_KEY: ${LLM_API_KEY}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
@@ -84,6 +84,7 @@ services:
   langfuse:
     image: ghcr.io/langfuse/langfuse:2
     container_name: langfuse
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
