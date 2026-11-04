@@ -33,7 +33,7 @@ class GeminiLLM(BaseLLM):
             model=self.model_name,
             google_api_key=resolved_key,
             temperature=self.temperature,
-            max_retries=2,
+            max_retries=6,
         )
 
     def get_chat_model(self) -> BaseChatModel:

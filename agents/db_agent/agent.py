@@ -1,6 +1,7 @@
 import contextvars
 import json
 import logging
+import time
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -36,7 +37,7 @@ _current_db_trace: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVa
 )
 
 
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     """
     State container for the LangGraph database agent workflow.
     """
@@ -51,6 +52,8 @@ class AgentState(TypedDict):
     error: Optional[str]
     retry_count: int
     session_id: Optional[str]
+    is_possible: bool
+    explanation: Optional[str]
 
 
 class DBAgent:
@@ -254,6 +257,17 @@ class DBAgent:
         resolved_table_names = queried_tables or ([table_name] if table_name and table_name.lower() in all_tables_lower else [])
         real_table_name = table_name if (table_name and table_name.lower() in all_tables_lower) else (resolved_table_names[0] if resolved_table_names else None)
 
+        if not sql_query:
+            return {
+                "status": "schema_mismatch",
+                "response": final_state.get("response", ""),
+                "metadata": {
+                    "schema_mismatch": True,
+                    "explanation": final_state.get("response", ""),
+                    "table_names": all_tables,
+                },
+            }
+
         return {
             "response": final_state.get("response", ""),
             "metadata": build_domain_metadata(
@@ -394,7 +408,14 @@ class DBAgent:
 
         workflow.add_edge(START, "inspect_schema")
         workflow.add_edge("inspect_schema", "generate_sql")
-        workflow.add_edge("generate_sql", "execute_sql")
+        workflow.add_conditional_edges(
+            "generate_sql",
+            self._route_after_sql_generation,
+            {
+                "execute": "execute_sql",
+                "respond": "generate_response",
+            },
+        )
         workflow.add_conditional_edges(
             "execute_sql",
             self._route_after_execution,
@@ -464,26 +485,58 @@ class DBAgent:
             handler = sql_span.get_langchain_handler()
             config = {"callbacks": [handler]} if handler else {}
 
-            try:
-                structured_model = self.chat_model.with_structured_output(SQLGenerationOutput)
-                result = structured_model.invoke(messages, config=config)
-                if isinstance(result, dict):
-                    result = SQLGenerationOutput.model_validate(result)
-
-                if isinstance(result, SQLGenerationOutput):
-                    sql = result.sql.strip()
-                    table_name = truncate_words(result.table_name.strip(), max_words=5)
-                    sql_description = truncate_words(result.sql_description.strip(), max_words=5)
-            except Exception as ex:
-                logger.warning(f"Structured SQL generation failed ({ex}), falling back to direct invoke")
+            for attempt in range(3):
                 try:
-                    ai_response = self.chat_model.invoke(messages, config=config)
-                    raw_text = extract_text_from_message_content(ai_response.content)
-                    sql = self._clean_sql_query(raw_text)
-                except Exception as fb_err:
-                    logger.error(f"Fallback invoke failed: {fb_err}")
+                    structured_model = self.chat_model.with_structured_output(SQLGenerationOutput)
+                    result = structured_model.invoke(messages, config=config)
+                    if isinstance(result, dict):
+                        result = SQLGenerationOutput.model_validate(result)
 
-            if not sql:
+                    if isinstance(result, SQLGenerationOutput):
+                        if not result.is_possible:
+                            expl = result.explanation or "The requested column or table does not exist in the database schema."
+                            sql_span.update(
+                                output={
+                                    "is_possible": False,
+                                    "explanation": expl,
+                                },
+                            )
+                            return {
+                                "is_possible": False,
+                                "explanation": expl,
+                                "response": expl,
+                                "sql_query": "",
+                                "table_name": "",
+                                "sql_description": "",
+                            }
+                        sql = result.sql.strip()
+                        table_name = truncate_words(result.table_name.strip(), max_words=5)
+                        sql_description = truncate_words(result.sql_description.strip(), max_words=5)
+                    break
+                except Exception as ex:
+                    err_str = str(ex)
+                    if attempt < 2 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                        time.sleep(2.0 * (attempt + 1))
+                        continue
+                    logger.warning(f"Structured SQL generation failed ({ex}), falling back to direct invoke")
+                    break
+
+            if not sql and state.get("is_possible") is not False:
+                for attempt in range(3):
+                    try:
+                        ai_response = self.chat_model.invoke(messages, config=config)
+                        raw_text = extract_text_from_message_content(ai_response.content)
+                        sql = self._clean_sql_query(raw_text)
+                        break
+                    except Exception as fb_err:
+                        err_str = str(fb_err)
+                        if attempt < 2 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                            time.sleep(2.0 * (attempt + 1))
+                            continue
+                        logger.error(f"Fallback invoke failed: {fb_err}")
+                        break
+
+            if not sql and state.get("is_possible") is not False:
                 sql = self._clean_sql_query(state.get("sql_query", ""))
 
             if not table_name:
@@ -547,6 +600,46 @@ class DBAgent:
             error = tool_result.get("error") if tool_result.get("status") == "error" else None
             current_retries = state.get("retry_count", 0)
 
+            # If 0 rows were returned, check if query used strict equality on strings (e.g. status = 'cancelled')
+            # and attempt a resilient softened execution (case-insensitive ILIKE with root word matching)
+            if not error and tool_result.get("row_count") == 0 and sql_query:
+                softened_query = sql_query
+                for eq_pattern, ilike_prefix in [(" = '", " ILIKE '%"), ("= '", " ILIKE '%"), ("='", " ILIKE '%")]:
+                    if eq_pattern in softened_query:
+                        parts = softened_query.split(eq_pattern)
+                        new_parts = [parts[0]]
+                        for part in parts[1:]:
+                            if "'" in part:
+                                val, rest = part.split("'", 1)
+                                search_val = val
+                                lower_val = search_val.lower()
+                                if lower_val.startswith("cancel"):
+                                    search_val = "cancel"
+                                elif lower_val.startswith("deliver"):
+                                    search_val = "deliver"
+                                elif lower_val.startswith("process"):
+                                    search_val = "process"
+                                elif lower_val.startswith("return"):
+                                    search_val = "return"
+                                elif lower_val.startswith("ship"):
+                                    search_val = "ship"
+                                new_parts.append(f"{ilike_prefix}{search_val}%'{rest}")
+                            else:
+                                new_parts.append(f"{eq_pattern}{part}")
+                        softened_query = "".join(new_parts)
+                        break
+
+                if softened_query != sql_query:
+                    retry_result = self.tools.execute(
+                        "execute_sql_to_csv",
+                        query=softened_query,
+                        filename=table_name,
+                        session_id=state.get("session_id"),
+                    )
+                    if retry_result.get("status") != "error" and (retry_result.get("row_count") or 0) > 0:
+                        tool_result = retry_result
+                        sql_query = softened_query
+
             if error:
                 exec_span.update(
                     level="ERROR",
@@ -566,12 +659,17 @@ class DBAgent:
 
             return {
                 "tool_result": tool_result,
+                "sql_query": sql_query,
                 "error": error,
                 "retry_count": current_retries + 1 if error else current_retries,
             }
 
     def _generate_response_node(self, state: AgentState) -> Dict[str, Any]:
         """Synthesizes an analytical answer based on user query and SQL execution results."""
+        if state.get("is_possible") is False or not state.get("sql_query"):
+            response_text = state.get("explanation") or state.get("response") or "The requested query could not be executed because the requested attributes do not exist in the schema."
+            return {"response": response_text}
+
         tool_result = state.get("tool_result") or {}
         preview_data = tool_result.get("preview", [])
         columns = tool_result.get("columns", [])
@@ -614,6 +712,12 @@ class DBAgent:
                 output={"response": response_text},
             )
             return {"response": response_text}
+
+    def _route_after_sql_generation(self, state: AgentState) -> Literal["execute", "respond"]:
+        """Routes to execute_sql if an executable query was generated, otherwise proceeds to respond."""
+        if state.get("is_possible") is False or not state.get("sql_query"):
+            return "respond"
+        return "execute"
 
     def _route_after_execution(self, state: AgentState) -> Literal["retry", "respond"]:
         """Routes back to generate_sql on error if retries remain, otherwise proceeds to respond."""

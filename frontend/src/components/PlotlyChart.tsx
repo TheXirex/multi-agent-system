@@ -17,22 +17,35 @@ function applyDarkThemeLayout(spec: Record<string, any>): Record<string, any> {
   const layout = cloned.layout || {};
   layout.autosize = true;
   delete layout.width;
-  layout.paper_bgcolor = '#212529';
-  layout.plot_bgcolor = '#212529';
+  layout.paper_bgcolor = 'rgba(0,0,0,0)';
+  layout.plot_bgcolor = 'rgba(0,0,0,0)';
   layout.font = { color: '#f8f9fa', family: 'inherit', ...(layout.font || {}) };
+  layout.colorway = ['#8b5cf6', '#f97316', '#06b6d4', '#10b981', '#f59e0b', '#ec4899', '#6366f1', '#14b8a6'];
 
   if (layout.template && typeof layout.template === 'object') {
     const tLayout = layout.template.layout || {};
-    tLayout.paper_bgcolor = '#212529';
-    tLayout.plot_bgcolor = '#212529';
+    tLayout.paper_bgcolor = 'rgba(0,0,0,0)';
+    tLayout.plot_bgcolor = 'rgba(0,0,0,0)';
     tLayout.font = { color: '#f8f9fa', ...(tLayout.font || {}) };
+    tLayout.colorway = layout.colorway;
   }
 
   if (layout.title) {
     layout.title = typeof layout.title === 'object' ? { ...layout.title, text: '' } : '';
   }
 
-  if (!layout.margin) {
+  const is3D =
+    Boolean(layout.scene) ||
+    (Array.isArray(cloned.data) && cloned.data.some((d: any) => d && d.type === 'scatter3d'));
+
+  if (is3D) {
+    layout.margin = {
+      l: Math.max(layout.margin?.l || 0, 30),
+      r: Math.max(layout.margin?.r || 0, 30),
+      t: Math.max(layout.margin?.t || 0, 30),
+      b: Math.max(layout.margin?.b || 0, 20),
+    };
+  } else if (!layout.margin) {
     layout.margin = { t: 24, r: 20, b: 44, l: 48 };
   } else {
     layout.margin.t = Math.min(layout.margin.t || 24, 28);
@@ -52,6 +65,82 @@ function applyDarkThemeLayout(spec: Record<string, any>): Record<string, any> {
     }
   });
 
+  if (layout.scene && typeof layout.scene === 'object') {
+    const scene = layout.scene;
+    ['xaxis', 'yaxis', 'zaxis'].forEach((k) => {
+      const axis = scene[k] || {};
+      axis.gridcolor = axis.gridcolor || '#343a40';
+      axis.zerolinecolor = axis.zerolinecolor || '#495057';
+      axis.linecolor = axis.linecolor || '#495057';
+      axis.tickcolor = axis.tickcolor || '#6c757d';
+      axis.tickfont = { size: 11, color: '#ced4da', ...(axis.tickfont || {}) };
+      axis.backgroundcolor = axis.backgroundcolor || 'rgba(52, 58, 64, 0.4)';
+      axis.showbackground = axis.showbackground !== undefined ? axis.showbackground : true;
+
+      const rawTitle = axis.title;
+      const titleObj =
+        typeof rawTitle === 'string'
+          ? { text: rawTitle }
+          : typeof rawTitle === 'object' && rawTitle !== null
+          ? rawTitle
+          : {};
+      const currentFontSize = titleObj.font?.size ? Number(titleObj.font.size) : 0;
+      axis.title = {
+        ...titleObj,
+        text: titleObj.text ? String(titleObj.text).split('_').join(' ') : axis.title,
+        font: {
+          ...(titleObj.font || {}),
+          size: Math.max(currentFontSize, 16),
+          color: '#f8f9fa',
+          weight: 600,
+        },
+      };
+      scene[k] = axis;
+    });
+
+    if (!scene.camera || !scene.camera.eye) {
+      scene.camera = { eye: { x: 1.35, y: 1.35, z: 1.15 } };
+    }
+    if (!scene.aspectmode) {
+      scene.aspectmode = 'cube';
+    }
+  }
+
+  if (Array.isArray(cloned.data)) {
+    cloned.data.forEach((trace: any) => {
+      if (trace && trace.type === 'scatter3d') {
+        trace.type = 'scatter';
+        delete trace.z;
+        trace.marker = trace.marker || {};
+        trace.marker.color = trace.marker.color || '#8b5cf6';
+        delete trace.marker.line;
+      } else if (trace && (trace.type === 'scatter' || trace.type === 'scattergl')) {
+        const mode = String(trace.mode || '');
+        const name = String(trace.name || '').toLowerCase();
+        if (mode.includes('lines') || name.includes('trendline') || name.includes('ols')) {
+          trace.line = { ...(trace.line || {}), color: '#f97316', width: 3.5, dash: 'solid' };
+        }
+        if (mode.includes('markers') || !mode) {
+          if (!trace.marker?.color || trace.marker.color === '#636efa' || trace.marker.color === '#1f77b4') {
+            trace.marker = { ...(trace.marker || {}), color: '#8b5cf6' };
+          }
+        }
+      } else if (trace && trace.type === 'pie') {
+        trace.hole = trace.hole !== undefined ? trace.hole : 0.4;
+      }
+    });
+  }
+
+  if (Array.isArray(layout.shapes)) {
+    layout.shapes.forEach((s: any) => {
+      if (s && s.line) {
+        s.line.dash = 'solid';
+        s.line.color = '#f97316';
+      }
+    });
+  }
+
+  delete layout.scene;
   cloned.layout = layout;
   return cloned;
 }
@@ -109,6 +198,11 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
       ? layoutTitle
       : null;
   const displayTitle = title || specTitle || 'Interactive Visualization';
+
+  const is3D =
+    Boolean(chartType?.toLowerCase().includes('3d')) ||
+    Boolean(spec?.data?.some((d: any) => d && d.type === 'scatter3d')) ||
+    Boolean(spec?.layout?.scene);
 
   const downloadFallbackSnapshot = () => {
     if (!containerRef.current) return;
@@ -204,7 +298,7 @@ export const PlotlyChart: React.FC<PlotlyChartProps> = ({
           display: isExpanded ? 'block' : 'none',
         }}
       >
-        <div ref={containerRef} style={{ width: '100%', minHeight: '380px' }} />
+        <div ref={containerRef} style={{ width: '100%', minHeight: is3D ? '520px' : '380px' }} />
       </div>
     </div>
   );

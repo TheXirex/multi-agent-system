@@ -24,6 +24,9 @@ services:
       dockerfile: Dockerfile
     container_name: ai
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: ["python", "-m", "agents.service"]
     environment:
       HOST: "0.0.0.0"
@@ -55,6 +58,9 @@ services:
       dockerfile: Dockerfile
     container_name: backend
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     command: ["python", "-m", "backend"]
     environment:
       HOST: "0.0.0.0"

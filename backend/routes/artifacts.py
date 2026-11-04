@@ -2,7 +2,9 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+import csv
+import io
+from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import text
 
 from backend.database import get_db
@@ -160,3 +162,91 @@ async def get_script(script_id: int) -> Dict[str, Any]:
         "dataset_id": row[4],
         "created_at": str(row[5]),
     }
+
+
+@router.get("/api/datasets/{dataset_id}")
+async def get_dataset(dataset_id: int) -> Dict[str, Any]:
+    """Retrieves an exported SQL query dataset by dataset_id."""
+    engine = get_db()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT id, name, query, columns, rows, row_count, session_id, created_at "
+                "FROM internal.generated_datasets WHERE id = :id"
+            ),
+            {"id": dataset_id},
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Dataset with ID {dataset_id} not found.")
+
+    raw_cols = row[3]
+    if isinstance(raw_cols, str):
+        try:
+            raw_cols = json.loads(raw_cols)
+        except Exception:
+            raw_cols = []
+
+    raw_rows = row[4]
+    if isinstance(raw_rows, str):
+        try:
+            raw_rows = json.loads(raw_rows)
+        except Exception:
+            raw_rows = []
+
+    return {
+        "id": str(row[0]),
+        "name": row[1],
+        "table_name": row[1],
+        "query": row[2],
+        "columns": raw_cols,
+        "rows": raw_rows,
+        "row_count": row[5],
+        "session_id": row[6],
+        "created_at": str(row[7]),
+    }
+
+
+@router.get("/api/datasets/{dataset_id}/csv")
+async def export_dataset_csv(dataset_id: int) -> Response:
+    """Exports an executed SQL query dataset as a downloadable CSV file."""
+    engine = get_db()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT id, name, columns, rows "
+                "FROM internal.generated_datasets WHERE id = :id"
+            ),
+            {"id": dataset_id},
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Dataset with ID {dataset_id} not found.")
+
+    raw_cols = row[2]
+    if isinstance(raw_cols, str):
+        try:
+            raw_cols = json.loads(raw_cols)
+        except Exception:
+            raw_cols = []
+    col_names = [c["name"] if isinstance(c, dict) else str(c) for c in raw_cols]
+
+    raw_rows = row[3]
+    if isinstance(raw_rows, str):
+        try:
+            raw_rows = json.loads(raw_rows)
+        except Exception:
+            raw_rows = []
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=col_names)
+    writer.writeheader()
+    for r in raw_rows:
+        writer.writerow({k: r.get(k, "") for k in col_names})
+
+    safe_name = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (row[1] or f"dataset_{dataset_id}"))
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.csv"'},
+    )

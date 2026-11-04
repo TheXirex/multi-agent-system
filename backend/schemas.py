@@ -51,6 +51,8 @@ class QueryRequest(BaseModel):
 
     query: str
     session_id: Optional[str] = None
+    uploaded_tables: Optional[List[str]] = None
+    uploaded_file: Optional[str] = None
 
 
 class QueryResponse(BaseModel):

@@ -125,11 +125,21 @@ export function formatHumanReadableError(err: any): string {
   return raw || 'An unexpected error occurred while processing your request. Please try again.';
 }
 
-export async function sendQuery(query: string, sessionId?: string): Promise<any> {
+export async function sendQuery(
+  query: string,
+  sessionId?: string,
+  uploadedTables?: string[],
+  uploadedFile?: string
+): Promise<any> {
   const res = await fetch(`${API_BASE}/api/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, session_id: sessionId }),
+    body: JSON.stringify({
+      query,
+      session_id: sessionId,
+      uploaded_tables: uploadedTables,
+      uploaded_file: uploadedFile,
+    }),
   });
 
   if (!res.ok) {
@@ -143,13 +153,20 @@ export async function sendQuery(query: string, sessionId?: string): Promise<any>
 export async function sendQueryStream(
   query: string,
   sessionId?: string,
-  onStatusUpdate?: (action: string) => void
+  onStatusUpdate?: (action: string) => void,
+  uploadedTables?: string[],
+  uploadedFile?: string
 ): Promise<any> {
   try {
     const res = await fetch(`${API_BASE}/api/query/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, session_id: sessionId }),
+      body: JSON.stringify({
+        query,
+        session_id: sessionId,
+        uploaded_tables: uploadedTables,
+        uploaded_file: uploadedFile,
+      }),
     });
 
     if (!res.ok) {
@@ -211,7 +228,7 @@ export async function sendQueryStream(
     console.warn('Streaming failed, falling back to standard query:', err);
   }
 
-  return await sendQuery(query, sessionId);
+  return await sendQuery(query, sessionId, uploadedTables, uploadedFile);
 }
 
 export async function uploadFile(file: File, sessionId?: string): Promise<any> {
@@ -232,6 +249,17 @@ export async function uploadFile(file: File, sessionId?: string): Promise<any> {
   }
 
   return await res.json();
+}
+
+export async function fetchDataset(datasetId: number): Promise<DatasetData | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/datasets/${datasetId}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.error(`Failed to fetch dataset ${datasetId}:`, err);
+    return null;
+  }
 }
 
 export async function fetchTable(tableName: string, sessionId?: string): Promise<DatasetData | null> {

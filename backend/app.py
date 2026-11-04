@@ -87,6 +87,19 @@ async def lifespan(app: FastAPI):
                     );
                     CREATE INDEX IF NOT EXISTS idx_generated_scripts_session_id
                         ON internal.generated_scripts(session_id);
+
+                    CREATE TABLE IF NOT EXISTS internal.generated_datasets (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(255) NOT NULL,
+                        query TEXT,
+                        columns JSONB NOT NULL,
+                        rows JSONB NOT NULL,
+                        row_count INTEGER NOT NULL,
+                        session_id VARCHAR(36),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_generated_datasets_session_id
+                        ON internal.generated_datasets(session_id);
                     """
                 )
             )

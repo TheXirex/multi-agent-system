@@ -1,9 +1,13 @@
+import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from sqlalchemy import Engine, text
 
 from agents.db_agent.tools.base import BaseTool
 from shared.db import apply_session_search_path, ensure_session_replica
+
+logger = logging.getLogger(__name__)
 
 
 class ExecuteSQLAndExportCSVTool(BaseTool):
@@ -82,8 +86,46 @@ class ExecuteSQLAndExportCSVTool(BaseTool):
                 for row in fetched_rows[:5]
             ]
 
+            formatted_rows: List[Dict[str, Any]] = [
+                {
+                    col: (
+                        str(val)
+                        if val is not None and not isinstance(val, (int, float, bool, str))
+                        else val
+                    )
+                    for col, val in zip(columns, row)
+                }
+                for row in fetched_rows
+            ]
+            column_defs = [{"name": c, "label": c, "type": "string"} for c in columns]
+
+            dataset_id: Optional[int] = None
+            try:
+                with self.engine.begin() as conn:
+                    insert_res = conn.execute(
+                        text(
+                            """
+                            INSERT INTO internal.generated_datasets (name, query, columns, rows, row_count, session_id)
+                            VALUES (:name, :query, :columns, :rows, :row_count, :session_id)
+                            RETURNING id
+                            """
+                        ),
+                        {
+                            "name": name,
+                            "query": query,
+                            "columns": json.dumps(column_defs),
+                            "rows": json.dumps(formatted_rows),
+                            "row_count": row_count,
+                            "session_id": session_id,
+                        },
+                    )
+                    dataset_id = insert_res.scalar()
+            except Exception as save_err:
+                logger.warning(f"Could not persist dataset to internal.generated_datasets: {save_err}")
+
             return {
                 "status": "success",
+                "dataset_id": dataset_id,
                 "name": name,
                 "file_name": f"{name}.csv",
                 "row_count": row_count,

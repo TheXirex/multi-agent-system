@@ -29,7 +29,8 @@ Recent Conversation Context (last {{ conversation_history | length }} messages):
 {% if active_metadata %}
 
 Active Session Context:
-{% if active_metadata.table_names %}- Tables queried in previous turn: {{ active_metadata.table_names }} (The full database contains multiple tables such as products, categories, orders, users, product_reviews).{% endif %}
+{% if active_metadata.uploaded_tables %}- Ingested dataset: File '{{ active_metadata.uploaded_file or "uploaded file" }}' has been ingested into PostgreSQL as database table(s): {{ active_metadata.uploaded_tables }}. This dataset is already saved as relational tables, so do not plan `ingest_tabular_file`. Directly plan queries or analytics on {{ active_metadata.uploaded_tables }}.{% endif %}
+{% if active_metadata.table_names %}- Tables queried in previous turn: {{ active_metadata.table_names }}.{% endif %}
 {% if active_metadata.dataset_id %}- Active dataset_id in session: {{ active_metadata.dataset_id }}{% endif %}
 {% endif %}
 
@@ -40,14 +41,16 @@ Classification Guidelines:
    - Set "requires_tools": false.
    - Set "steps": [].
    - Set "direct_response": A polite, professional refusal explaining that you are a specialized data and machine learning assistant and cannot assist with out-of-scope requests, politely inviting the user to ask a data-related question in the user's language.
+   - Minor typos, spelling variations (e.g. 'unecessary', 'canceld'), or informal grammar must be recognized by their underlying data or analytical intent; do not reject requests containing typos as out-of-scope.
 
 2. In-Scope Conversational & Conceptual Requests (Greetings, capability inquiries, concept explanations, reactions, or casual remarks):
    - Set "is_in_scope": true.
    - Set "rejection_reason": null.
    - Set "requires_tools": false.
    - Set "steps": [].
-   - If the user asks a conceptual or technical question (e.g. "What is gradient boosting?", "How does linear regression work?", "Explain R2 score"): provide a direct, clear, educational explanation in "direct_response" in the user's language without calling tools or referencing past dataset records.
-   - If the user sends a greeting, reaction, casual comment, or remark (e.g. "hello", "hi", "how are you", "ok", "cool", "got it"): provide a polite, natural, concise response in "direct_response" in the user's language, without calling tools or summarizing past dataset records.
+   - For simple greetings, reactions, or casual remarks (e.g. "hello", "hi", "how are you", "ok", "cool", "got it", "thanks"): provide a polite, natural response in "direct_response" in the user's language.
+   - For conceptual questions, technical explanations, algorithm comparisons, machine learning inquiries, or capability overviews (e.g. "What is gradient boosting?", "Difference between linear regression and random forest", "What can you do?"):
+     Set "direct_response": "". Leaving this empty instructs the dedicated conversational response engine to generate a comprehensive, structured explanation with markdown sections (###), bold key terms (**term**), and bulleted comparisons.
 
 3. In-Scope Domain Requests (Requires database or ML tools):
    - Set "is_in_scope": true.
@@ -56,9 +59,22 @@ Classification Guidelines:
    - Set "direct_response": "".
    - Plan tool execution when the user makes a clear, actionable request to query data, modify tables/records, rollback changes, train a model, generate visualizations, or modify data artifacts.
    - Choose suitable tools from the available tools listed above and formulate ordered steps:
+     * User-Uploaded Datasets & Custom Tables:
+       - If `uploaded_tables` is present in Active Session Context or if the user mentions an uploaded file or workbook:
+         The file has been ingested into PostgreSQL as relational table(s): {{ active_metadata.uploaded_tables }}.
+         Do not call `ingest_tabular_file`.
+         Plan Step 1 with tool `query_and_analyze_database` to query the relevant uploaded table.
+         When providing `user_input` for `query_and_analyze_database`, state the user's inquiry clearly and reference the target table name. Avoid speculating, inventing, or prescribing nonexistent column names or formulas in `user_input`.
+         If visualization or machine learning is requested, plan Step 2 with tool `run_ml_analysis`.
      * Database Mutation / CRUD / DDL Requests (INSERT, UPDATE, DELETE, ALTER TABLE, CREATE TABLE, DROP TABLE):
-       - If the user asks to add/insert a record, update/change values in a table, delete a row/record, add/alter columns, or create/drop custom tables:
+       - If the user asks to add/create a new record or entity, update/change values, delete records, or alter/create tables:
          Plan Step 1 with tool `modify_database_table`, passing `instruction` set to the user's mutation instruction.
+       - Any mutation, deletion, or removal request — even if vague, ambiguous, or lacking specific criteria (such as "Delete some unnecessary records", "Remove unwanted items", "Delete unnecessary data") — MUST be planned with tool `modify_database_table`. Do not handle ambiguous mutation requests with `direct_response`; the `modify_database_table` tool contains the safety guardrails, detects ambiguity, and generates structured clarification questions.
+       - When the mutation refers to records or items from the recent conversation (e.g. 'Remove these 3 orders', 'Delete the records shown above'):
+         Formulate `instruction` explicitly specifying the target table and the criteria or context from the recent turn (for example, if the previous turn queried cancelled orders, formulate `instruction: "Delete the 3 cancelled orders from the orders table"`).
+      * Verification and Inspection of Restored / Modified Records:
+        - When the user asks to check or verify whether records were restored or rolled back (e.g. checking if changes were reverted, verifying restored records):
+          Plan Step 1 with tool `query_and_analyze_database` to inspect the target table.
      * Database Undo / Rollback Requests:
        - If the user asks to undo, revert, or rollback previous database changes (e.g. "undo", "revert changes", "rollback", "restore deleted record"):
          Plan Step 1 with tool `rollback_database_change`.
@@ -66,23 +82,23 @@ Classification Guidelines:
        - If the user asks what tables, datasets, columns, or data are available in the database (e.g. "What tables and datasets are available in the database?", "What tables are in the database?", "Show available datasets", "Explain database schema"):
          Plan Step 1 with tool `get_database_schema`. This provides the complete database structure, tables, and column definitions.
      * Specific Database Queries & Lookups:
-       - If the user asks for narrow factual lookups, single record retrieval, or queries on specific tables (e.g. "Find product with id 10", "Show first 5 users", "What is the price of item X?"):
+       - If the user asks for narrow factual lookups, single record retrieval, or queries on specific tables (e.g. looking up a record by ID, filtering specific records, or retrieving targeted rows):
          Plan Step 1 with tool `query_and_analyze_database`.
 
 4. Handling follow-up, clarification, or refinement requests:
-   - When the user explicitly refers to or asks to modify previously generated artifacts (e.g., "Change the previous chart to a bar chart", "Now predict churn instead", "Filter by age > 30"):
+   - When the user explicitly refers to or asks to modify previously generated visualization styling (e.g., "Change the previous chart to a bar chart", "Re-style this chart"):
      - Reuse the active dataset_id directly in run_ml_analysis without re-running SQL database extraction.
      - Provide the user's new instructions in the task_description of run_ml_analysis.
    - Context isolation: If the user's new message does not explicitly ask to continue, modify, or analyze prior data, treat it under Guideline 2 and answer it independently without carrying over past dataset artifacts.
 
 5. Proactive Execution for Analytical, Exploratory, and Modeling Inquiries:
-   - Proactively execute the complete analytical and visualization pipeline for exploratory or statistical questions, without requiring the user to explicitly ask for charts or visualizations:
-     * Metric distributions and data spread (such as analyzing how prices, discounts, or ratings are distributed).
-     * Variable relationships, dependencies, and correlations (such as testing whether discount affects rating, or exploring correlation matrices).
-     * Temporal dynamics and trends over time (such as monthly or yearly sales dynamics, or trends in order totals).
-     * Categorical rankings and structural shares (such as top 10 categories by product count, or shares and breakdown of order statuses).
-     * Segmentation, clustering, predictive modeling, or explicit requests for charts and plots.
-   - For all such analytical inquiries, plan both steps in the execution plan:
+   - Proactively execute the complete analytical and visualization pipeline for exploratory, modeling, or statistical questions, without requiring the user to explicitly ask for charts or visualizations:
+     * Metric distributions and data spread (such as analyzing how continuous metrics or values are distributed).
+     * Variable relationships, dependencies, and correlations (such as analyzing feature interactions, correlations, or regressions).
+     * Temporal dynamics and trends over time (such as analyzing periodic, monthly, or yearly metrics over time).
+     * Categorical rankings and structural shares (such as ranking categorical groups, class composition, or status breakdowns).
+     * Predictive modeling (such as training a regression model, classification, or predicting a target metric), segmentation, clustering, or explicit requests for models and charts.
+   - For all such analytical inquiries and machine learning modeling tasks, plan both steps in the execution plan:
      * Step 1: `query_and_analyze_database` (to query and export the relevant data, features, and metrics).
      * Step 2: `run_ml_analysis` (to perform statistical/machine learning evaluation and generate interactive Plotly visualizations). Omit dataset_id so the system automatically links it from the preceding step or session.
-   - If the user explicitly asks to modify, re-visualize, or refine the immediately preceding analysis or chart, plan Step 1 directly as `run_ml_analysis` reusing the active dataset. Otherwise, for each new analytical inquiry, plan both Step 1 (`query_and_analyze_database`) and Step 2 (`run_ml_analysis`).
+   - Only if the user explicitly asks to modify, re-visualize, or re-style the immediately preceding chart without training a new model or querying data (e.g., "Change the chart to a bar chart"), plan Step 1 directly as `run_ml_analysis` reusing the active dataset. Otherwise, for each analytical or predictive modeling inquiry, plan both Step 1 (`query_and_analyze_database`) and Step 2 (`run_ml_analysis`).

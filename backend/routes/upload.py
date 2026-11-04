@@ -63,18 +63,6 @@ async def upload_file(
     created_tables = result.get("tables", [])
     msg_markdown = result.get("response") or result.get("summary", "")
 
-    if session_id:
-        save_chat_message(
-            engine,
-            session_id,
-            "assistant",
-            msg_markdown,
-            {
-                "table_names": table_names,
-                "uploaded_file": filename,
-            },
-        )
-
     return {
         "status": "success",
         "session_id": session_id,

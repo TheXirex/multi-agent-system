@@ -35,7 +35,10 @@ async function resolveTurnArtifacts(
   sqlQuery: string | null;
 }> {
   let datasetData: DatasetData | null = null;
-  if (meta.table_names && meta.table_names.length > 0) {
+  if (meta.dataset_id) {
+    datasetData = await api.fetchDataset(meta.dataset_id);
+  }
+  if (!datasetData && meta.table_names && meta.table_names.length > 0) {
     datasetData = await api.fetchTable(meta.table_names[0], sessionId || undefined);
   }
 
@@ -230,120 +233,115 @@ export function App() {
   };
 
   const handleSendQuery = async (text: string, attachedFile?: File | null) => {
-    if (isBusy || (!text && !attachedFile)) return;
+    const trimmed = text.trim();
+    if (isBusy || !trimmed) return;
 
     setIsBusy(true);
 
-    try {
-      if (attachedFile) {
-        setCurrentAction('Ingesting dataset...');
-        const userMsg: Message = {
-          role: 'user',
-          content: text || `Uploaded file: ${attachedFile.name}`,
-          metadata: {
-            attachments: [
-              {
-                filename: attachedFile.name,
-                size_str: formatFileSize(attachedFile.size),
-              },
-            ],
-          },
-        };
-        setMessages((prev) => [...prev, userMsg]);
-
-        const uploadRes = await api.uploadFile(attachedFile, currentSessionId || undefined);
-        const tableNames: string[] =
-          uploadRes.table_names || (uploadRes.table_name ? [uploadRes.table_name] : []);
-        const msgText = uploadRes.message || `File \`${attachedFile.name}\` uploaded and ingested.`;
-
-        let dsData: DatasetData | null = null;
-        if (tableNames.length > 0) {
-          dsData = await api.fetchTable(
-            tableNames[0],
-            uploadRes.session_id || currentSessionId || undefined
-          );
-        }
-
-        const newTurnIdx = turns.length + 1;
-        const assistantMsg: Message = {
-          role: 'assistant',
-          content: msgText,
-          metadata: { table_names: tableNames },
-          turnIndex: newTurnIdx,
-          datasetData: dsData,
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-
-        const newTurn: TurnArtifacts = {
-          turnIndex: newTurnIdx,
-          totalTurns: newTurnIdx,
-          userQuery: text || `Uploaded ${attachedFile.name}`,
-          messageContent: msgText,
-          metadata: { table_names: tableNames },
-          datasetData: dsData,
-          chartsData: [],
-        };
-
-        setTurns((prev) => {
-          const updated = [...prev, newTurn];
-          for (const t of updated) t.totalTurns = updated.length;
-          return updated;
-        });
-        setCurrentTurnIndex(newTurnIdx);
-      } else {
-        setCurrentAction('Planning execution steps...');
-        const userMsg: Message = {
-          role: 'user',
-          content: text,
-        };
-        setMessages((prev) => [...prev, userMsg]);
-
-        const queryRes = await api.sendQueryStream(
-          text,
-          currentSessionId || undefined,
-          (action) => setCurrentAction(action)
-        );
-        const responseText = queryRes.response || 'No response generated.';
-        const meta: MessageMetadata = queryRes.metadata || {};
-
-        const { datasetData, chartsData, pythonScript, sqlQuery } = await resolveTurnArtifacts(
-          responseText,
-          meta,
-          queryRes.session_id || currentSessionId
-        );
-
-        const newTurnIdx = turns.length + 1;
-        const assistantMsg: Message = {
-          role: 'assistant',
-          content: responseText,
-          metadata: meta,
-          turnIndex: newTurnIdx,
-          datasetData,
-          chartsData,
-          pythonScript,
-          sqlQuery,
-        };
-        setMessages((prev) => [...prev, assistantMsg]);
-
-        const newTurn: TurnArtifacts = {
-          turnIndex: newTurnIdx,
-          totalTurns: newTurnIdx,
-          userQuery: text,
-          messageContent: responseText,
-          metadata: meta,
-          datasetData,
-          chartsData,
-          pythonScript,
-          sqlQuery,
-        };
-
-        setTurns((prev) => {
-          const updated = [...prev, newTurn];
-          for (const t of updated) t.totalTurns = updated.length;
-          return updated;
-        });
-        setCurrentTurnIndex(newTurnIdx);
+    let activeSessionId = currentSessionId;
+    if (!activeSessionId) {
+      const newSession = await api.createSession();
+      if (!newSession) {
+        setIsBusy(false);
+        return;
       }
+      activeSessionId = newSession.id;
+      setCurrentSessionId(activeSessionId);
+      setSessions((prev) => [newSession, ...prev]);
+    }
+
+    try {
+      const userMsg: Message = {
+        role: 'user',
+        content: trimmed,
+        metadata: attachedFile
+          ? {
+              attachments: [
+                {
+                  filename: attachedFile.name,
+                  size_str: formatFileSize(attachedFile.size),
+                },
+              ],
+            }
+          : {},
+      };
+      setMessages((prev) => [...prev, userMsg]);
+
+      let uploadedTables: string[] = [];
+      let uploadedFilename: string | undefined = undefined;
+
+      if (attachedFile) {
+        setCurrentAction('Uploading and ingesting file...');
+        try {
+          const uploadRes = await api.uploadFile(attachedFile, activeSessionId);
+          uploadedTables =
+            uploadRes.table_names || (uploadRes.table_name ? [uploadRes.table_name] : []);
+          uploadedFilename = attachedFile.name;
+        } catch (uploadErr: any) {
+          const errorMsg = uploadErr.message || 'File ingestion error';
+          const errMsg: Message = {
+            role: 'assistant',
+            content: `Failed to upload file \`${attachedFile.name}\`: ${errorMsg}`,
+          };
+          setMessages((prev) => [...prev, errMsg]);
+          setIsBusy(false);
+          setCurrentAction(null);
+          return;
+        }
+      }
+
+      setCurrentAction('Planning execution steps...');
+      const queryRes = await api.sendQueryStream(
+        trimmed,
+        activeSessionId,
+        (action) => setCurrentAction(action),
+        uploadedTables.length > 0 ? uploadedTables : undefined,
+        uploadedFilename
+      );
+
+      const responseText = queryRes.response || 'No response generated.';
+      const meta: MessageMetadata = queryRes.metadata || {};
+      if (uploadedTables.length > 0 && !meta.table_names) {
+        meta.table_names = uploadedTables;
+      }
+
+      const { datasetData, chartsData, pythonScript, sqlQuery } = await resolveTurnArtifacts(
+        responseText,
+        meta,
+        queryRes.session_id || activeSessionId
+      );
+
+      const newTurnIdx = turns.length + 1;
+      const assistantMsg: Message = {
+        role: 'assistant',
+        content: responseText,
+        metadata: meta,
+        turnIndex: newTurnIdx,
+        datasetData,
+        chartsData,
+        pythonScript,
+        sqlQuery,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+
+      const newTurn: TurnArtifacts = {
+        turnIndex: newTurnIdx,
+        totalTurns: newTurnIdx,
+        userQuery: trimmed,
+        messageContent: responseText,
+        metadata: meta,
+        datasetData,
+        chartsData,
+        pythonScript,
+        sqlQuery,
+      };
+
+      setTurns((prev) => {
+        const updated = [...prev, newTurn];
+        for (const t of updated) t.totalTurns = updated.length;
+        return updated;
+      });
+      setCurrentTurnIndex(newTurnIdx);
 
       const updatedSessions = await api.fetchSessions();
       setSessions(updatedSessions);

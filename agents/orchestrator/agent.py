@@ -44,6 +44,36 @@ _current_mcp_session: contextvars.ContextVar[Optional[ActiveMCPSession]] = conte
 )
 
 # Context variable to hold active Langfuse trace across async graph nodes
+def strip_filenames_from_text(text: str) -> str:
+    """Removes raw filenames and extensions (e.g. actual_vs_predicted.json) from text."""
+    if not text or (".json" not in text and ".csv" not in text):
+        return text
+    lines = text.split("\n")
+    cleaned_lines = []
+    for line in lines:
+        words = line.split(" ")
+        new_words = []
+        for word in words:
+            clean_w = word.strip("`'\"(),.:;!?")
+            if (clean_w.endswith(".json") or clean_w.endswith(".csv")) and len(clean_w) > 5:
+                replacement = "the visualization" if clean_w.endswith(".json") else "the dataset"
+                suffix = ""
+                for ch in reversed(word):
+                    if ch in "`'\"),.:;!?":
+                        suffix = ch + suffix
+                    else:
+                        break
+                new_words.append(f"{replacement}{suffix}")
+            else:
+                new_words.append(word)
+        cleaned_line = " ".join(new_words)
+        cleaned_line = cleaned_line.replace("The visualization in the visualization", "The visualization")
+        cleaned_line = cleaned_line.replace("the visualization in the visualization", "the visualization")
+        cleaned_line = cleaned_line.replace("in the visualization confirms", "The visualization confirms")
+        cleaned_lines.append(cleaned_line)
+    return "\n".join(cleaned_lines)
+
+
 _current_trace: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
     "_current_trace", default=None
 )
@@ -280,18 +310,47 @@ class OrchestratorAgent:
 
             try:
                 structured_model = self.chat_model.with_structured_output(ExecutionPlan)
-                plan = await structured_model.ainvoke(messages, config=config)
+                plan = None
+                for attempt in range(5):
+                    try:
+                        plan = await structured_model.ainvoke(messages, config=config)
+                        break
+                    except Exception as invoke_err:
+                        err_str = str(invoke_err)
+                        if attempt < 4 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                            await asyncio.sleep(2.0 * (attempt + 1))
+                            continue
+                        raise invoke_err
 
                 if isinstance(plan, dict):
                     plan = ExecutionPlan.model_validate(plan)
+
+                if active_metadata.get("uploaded_tables"):
+                    original_steps = list(plan.steps)
+                    plan.steps = [s for s in plan.steps if s.tool_name != "ingest_tabular_file"]
+                    if len(plan.steps) != len(original_steps):
+                        logger.info(
+                            f"Removed redundant ingest_tabular_file step because tables "
+                            f"{active_metadata.get('uploaded_tables')} are already stored in PostgreSQL."
+                        )
+                        if not plan.steps:
+                            first_table = active_metadata["uploaded_tables"][0]
+                            plan.steps = [
+                                PlanStep(
+                                    step_id=1,
+                                    tool_name="query_and_analyze_database",
+                                    arguments={"instruction": f"Select and display sample data from {first_table}"},
+                                )
+                            ]
+                        else:
+                            for idx, step in enumerate(plan.steps, start=1):
+                                step.step_id = idx
 
                 if not plan.is_in_scope:
                     plan.requires_tools = False
                     plan.steps = []
                 elif not plan.steps:
                     plan.requires_tools = False
-                    if not plan.direct_response and plan.thought:
-                        plan.direct_response = plan.thought
 
                 plan_span.update(
                     output={
@@ -319,8 +378,23 @@ class OrchestratorAgent:
                 }
             except Exception as err:
                 logger.warning(f"Structured plan extraction failed ({err}), falling back to direct response.")
-                resp = await self.chat_model.ainvoke(messages, config=config)
-                text = extract_text_from_message_content(resp.content)
+                text = ""
+                for fallback_attempt in range(3):
+                    try:
+                        resp = await self.chat_model.ainvoke(messages, config=config)
+                        text = extract_text_from_message_content(resp.content)
+        
+                        if text:
+                            break
+                    except Exception as fallback_err:
+                        err_str = str(fallback_err)
+                        if fallback_attempt < 2 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                            await asyncio.sleep(2.0 * (fallback_attempt + 1))
+                            continue
+                        logger.warning(f"Direct fallback invocation failed: {fallback_err}")
+                if not text:
+                    text = "I am ready to help you explore database schemas, execute analytical queries, and train machine learning models."
+
                 plan_span.update(
                     output={
                         "is_in_scope": True,
@@ -379,17 +453,36 @@ class OrchestratorAgent:
             input_data={"user_query": user_query},
             metadata={"active_metadata": state.get("active_metadata") or {}},
         ) as direct_span:
-            direct_text = state.get("direct_response") or state.get("thought", "")
-            if not direct_text.strip():
-                direct_prompt = prompt_loader.render("direct")
+            direct_text = (state.get("direct_response") or "").strip()
+            needs_generation = not direct_text
+            if not needs_generation and len(user_query.split()) > 3:
+                has_formatting = any(m in direct_text for m in ("###", "**", "- ", "* "))
+                if not has_formatting:
+                    needs_generation = True
+
+            if needs_generation:
+                direct_prompt = prompt_loader.render(
+                    "direct",
+                    conversation_history=state.get("conversation_history", []),
+                )
                 messages = [
                     SystemMessage(content=direct_prompt),
                     HumanMessage(content=user_query),
                 ]
                 handler = direct_span.get_langchain_handler()
                 config = {"callbacks": [handler]} if handler else {}
-                resp = await self.chat_model.ainvoke(messages, config=config)
-                direct_text = extract_text_from_message_content(resp.content)
+                for attempt in range(5):
+                    try:
+                        resp = await self.chat_model.ainvoke(messages, config=config)
+                        direct_text = extract_text_from_message_content(resp.content)
+                        break
+                    except Exception as err:
+                        err_str = str(err)
+                        if attempt < 4 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                            await asyncio.sleep(2.0 * (attempt + 1))
+                            continue
+                        logger.error(f"Direct response generation failed: {err}")
+                        break
 
             sess_id = (state.get("active_metadata") or {}).get("session_id") or (state.get("metadata") or {}).get("session_id")
             res_metadata = {"session_id": sess_id} if sess_id else {}
@@ -469,16 +562,25 @@ class OrchestratorAgent:
             },
             metadata={"metadata_in": metadata},
         ) as synth_span:
-            prompt_content = (
-                f"User Question: {user_query}\n\n"
-                f"Tool Execution Results:\n{raw_text}\n"
-            )
+            active_meta = state.get("active_metadata", {})
+            prompt_content_parts = [
+                f"User Question: {user_query}",
+            ]
+            if active_meta.get("uploaded_tables"):
+                file_info = active_meta.get("uploaded_file") or "Uploaded file"
+                tables_str = ", ".join(active_meta["uploaded_tables"])
+                prompt_content_parts.append(
+                    f"Uploaded File Context: The file '{file_info}' has already been processed and stored in the database as table(s): {tables_str}. Do not claim the file is missing or unlocatable."
+                )
+            prompt_content_parts.append(f"Tool Execution Results:\n{raw_text}")
+            prompt_content = "\n\n".join(prompt_content_parts)
 
             messages = [
                 SystemMessage(
                     content=prompt_loader.render(
                         "synthesis",
                         conversation_history=state.get("conversation_history", []),
+                        active_metadata=active_meta,
                     )
                 ),
                 HumanMessage(content=prompt_content),
@@ -489,7 +591,7 @@ class OrchestratorAgent:
 
             try:
                 response = await self.chat_model.ainvoke(messages, config=config)
-                final_text = extract_text_from_message_content(response.content)
+                final_text = strip_filenames_from_text(extract_text_from_message_content(response.content))
             except Exception as exc:
                 logger.error(f"Error synthesizing response in Orchestrator: {exc}")
                 final_text = raw_text or "Execution completed."

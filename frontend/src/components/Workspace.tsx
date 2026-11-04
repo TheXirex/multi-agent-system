@@ -9,6 +9,7 @@ import {
   Search,
   Database,
   Terminal,
+  Download,
 } from 'lucide-react';
 import { useScrollGutter } from '../utils/scrollAutoHide';
 import { PlotlyChart } from './PlotlyChart';
@@ -131,6 +132,30 @@ export const Workspace: React.FC<WorkspaceProps> = ({
   const bodyScrollRef = useRef<HTMLDivElement>(null);
   const scrollGutter = useScrollGutter(bodyScrollRef, `${activeTab}-${currentTurnIndex}`, 0);
 
+  const handleDownloadCSV = () => {
+    if (!columns.length || !filteredRows.length) return;
+    const header = columns.map((c) => `"${(c.label || c.name).replace(/"/g, '""')}"`).join(',');
+    const rowsText = filteredRows
+      .map((r) =>
+        columns
+          .map((c) => {
+            const val = r[c.name];
+            const str = val !== undefined && val !== null ? String(val) : '';
+            return `"${str.replace(/"/g, '""')}"`;
+          })
+          .join(',')
+      )
+      .join('\n');
+    const csvContent = `${header}\n${rowsText}`;
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${activeTurn?.datasetData?.name || 'dataset'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="panel-card">
       <div className="workspace-header">
@@ -205,26 +230,38 @@ export const Workspace: React.FC<WorkspaceProps> = ({
                     <span className="agent-label">
                       {activeTurn?.datasetData?.name || 'Dataset'}
                     </span>
-                    <span className="badge">
-                      {filteredRows.length} {filteredRows.length === 1 ? 'row' : 'rows'}
-                    </span>
                   </div>
 
-                  <div className="table-search-box">
-                    <Search size={12} color="#adb5bd" style={{ flexShrink: 0 }} />
-                    <input
-                      type="text"
-                      placeholder="Search records..."
-                      value={tableSearch}
-                      onChange={(e) =>
-                        setSearchState({
-                          query: e.target.value,
-                          page: 1,
-                          turnIndex: currentTurnIndex,
-                        })
-                      }
-                      className="table-search-input"
-                    />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div className="table-search-box">
+                      <Search size={12} color="#adb5bd" style={{ flexShrink: 0 }} />
+                      <input
+                        type="text"
+                        placeholder="Search records..."
+                        value={tableSearch}
+                        onChange={(e) =>
+                          setSearchState({
+                            query: e.target.value,
+                            page: 1,
+                            turnIndex: currentTurnIndex,
+                          })
+                        }
+                        className="table-search-input"
+                      />
+                    </div>
+
+                    <span className="badge badge-light">
+                      {filteredRows.length} {filteredRows.length === 1 ? 'row' : 'rows'}
+                    </span>
+
+                    <button
+                      onClick={handleDownloadCSV}
+                      title="Download as CSV"
+                      className="page-btn"
+                    >
+                      <Download size={12} />
+                      <span>CSV</span>
+                    </button>
                   </div>
                 </div>
 

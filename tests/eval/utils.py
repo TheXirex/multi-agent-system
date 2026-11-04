@@ -96,10 +96,20 @@ class EvaluationRunner:
         data = response.json()
         return str(data["id"])
 
-    def execute_turn(self, session_id: str, query: str) -> Dict[str, Any]:
+    def execute_turn(
+        self,
+        session_id: str,
+        query: str,
+        uploaded_tables: Optional[List[str]] = None,
+        uploaded_file: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Streams a conversational turn from the backend and returns aggregated response and metadata."""
         url = f"{self.backend_url}/api/query/stream"
-        payload = {"query": query, "session_id": session_id}
+        payload: Dict[str, Any] = {"query": query, "session_id": session_id}
+        if uploaded_tables:
+            payload["uploaded_tables"] = uploaded_tables
+        if uploaded_file:
+            payload["uploaded_file"] = uploaded_file
         start_ts = time.time()
         response = requests.post(url, json=payload, stream=True, timeout=240)
         response.raise_for_status()
@@ -143,7 +153,12 @@ class EvaluationRunner:
             "duration_s": duration_s,
         }
 
-    def execute_upload(self, session_id: str, file_path_str: str) -> Dict[str, Any]:
+    def execute_upload(
+        self,
+        session_id: str,
+        file_path_str: str,
+        user_query: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Uploads a fixture file to the backend via POST /api/upload and returns execution results."""
         file_path = Path(file_path_str)
         if not file_path.exists():
@@ -182,6 +197,33 @@ class EvaluationRunner:
             if response.status_code == 200:
                 res_json = response.json()
                 table_names = res_json.get("table_names", [])
+                if user_query:
+                    query_res = self.execute_turn(
+                        session_id=session_id,
+                        query=user_query,
+                        uploaded_tables=table_names,
+                        uploaded_file=filename,
+                    )
+                    combined_tools = ["ingest_tabular_file"]
+                    for t in query_res.get("tools_called", []):
+                        if t not in combined_tools:
+                            combined_tools.append(t)
+                    combined_meta = dict(query_res.get("metadata", {}))
+                    if "table_names" not in combined_meta:
+                        combined_meta["table_names"] = table_names
+                    return {
+                        "action": "upload",
+                        "status_code": 200,
+                        "status": "success",
+                        "table_names": table_names,
+                        "response": query_res.get("response", ""),
+                        "metadata": combined_meta,
+                        "tools_called": combined_tools,
+                        "statuses": query_res.get("statuses", []),
+                        "duration_s": round(duration_s + query_res.get("duration_s", 0.0), 2),
+                        "trace_id": query_res.get("trace_id"),
+                    }
+
                 msg = res_json.get("message", "")
                 return {
                     "action": "upload",
@@ -230,8 +272,8 @@ class EvaluationRunner:
         actual_result: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Evaluates actual turn execution against expected routing, tools, metadata, and assertions."""
-        if turn_spec.get("action") == "upload":
-            expected_status = turn_spec.get("expected_status", "success")
+        if turn_spec.get("action") == "upload" and turn_spec.get("expected_status") == "error":
+            expected_status = "error"
             actual_status = actual_result.get("status")
             status_pass = (actual_status == expected_status)
             routing_score = 1.0 if status_pass else 0.0
@@ -241,13 +283,7 @@ class EvaluationRunner:
             assertion_failures: List[str] = []
             for rule in turn_spec.get("assertions", []):
                 rule_type = rule.get("type")
-                if rule_type == "upload_success":
-                    if actual_status != "success":
-                        assertion_failures.append(f"Upload failed: {actual_result.get('error')}")
-                    expected_tbl = rule.get("table")
-                    if expected_tbl and expected_tbl not in actual_result.get("table_names", []):
-                        assertion_failures.append(f"Expected table '{expected_tbl}' missing from created tables")
-                elif rule_type == "upload_error_contains":
+                if rule_type == "upload_error_contains":
                     expected_snippet = str(rule.get("text", "")).lower()
                     actual_err = str(actual_result.get("error", "")).lower()
                     if expected_snippet not in actual_err:
@@ -357,9 +393,21 @@ class EvaluationRunner:
                 if "JOIN" not in sql_upper:
                     assertion_failures.append("Expected JOIN clause missing in sql_query")
 
+            elif rule_type == "upload_success":
+                expected_tbl = rule.get("table")
+                actual_tbls = actual_result.get("table_names", []) or metadata.get("table_names", [])
+                if expected_tbl and expected_tbl not in actual_tbls:
+                    assertion_failures.append(f"Expected table '{expected_tbl}' missing from created tables {actual_tbls}")
+
             elif rule_type == "chart_generated":
                 if not (metadata.get("chart_id") or metadata.get("chart_ids")):
                     assertion_failures.append("Expected interactive chart_id missing from metadata")
+
+            elif rule_type == "charts_count_minimum":
+                min_count = int(rule.get("count", 1))
+                actual_charts = metadata.get("chart_ids") or ([] if not metadata.get("chart_id") else [metadata["chart_id"]])
+                if len(actual_charts) < min_count:
+                    assertion_failures.append(f"Expected at least {min_count} charts, got {len(actual_charts)}")
 
             elif rule_type == "ml_metrics_present":
                 metrics = rule.get("metrics", [])

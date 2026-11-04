@@ -85,6 +85,36 @@ def _clear_color_title_field(container: Dict[str, Any], key: str) -> None:
         container[key] = ""
 
 
+def strip_filenames_from_text(text: str) -> str:
+    """Removes raw filenames and extensions (e.g. actual_vs_predicted.json) from text."""
+    if not text or (".json" not in text and ".csv" not in text):
+        return text
+    lines = text.split("\n")
+    cleaned_lines = []
+    for line in lines:
+        words = line.split(" ")
+        new_words = []
+        for word in words:
+            clean_w = word.strip("`'\"(),.:;!?")
+            if (clean_w.endswith(".json") or clean_w.endswith(".csv")) and len(clean_w) > 5:
+                replacement = "the visualization" if clean_w.endswith(".json") else "the dataset"
+                suffix = ""
+                for ch in reversed(word):
+                    if ch in "`'\"),.:;!?":
+                        suffix = ch + suffix
+                    else:
+                        break
+                new_words.append(f"{replacement}{suffix}")
+            else:
+                new_words.append(word)
+        cleaned_line = " ".join(new_words)
+        cleaned_line = cleaned_line.replace("The visualization in the visualization", "The visualization")
+        cleaned_line = cleaned_line.replace("the visualization in the visualization", "the visualization")
+        cleaned_line = cleaned_line.replace("in the visualization confirms", "The visualization confirms")
+        cleaned_lines.append(cleaned_line)
+    return "\n".join(cleaned_lines)
+
+
 def _clean_chart_spec(spec: Dict[str, Any]) -> None:
     """Sanitizes a Plotly figure specification in-place by removing duplicate titles and generic 'color' labels."""
     if not isinstance(spec, dict):
@@ -123,6 +153,47 @@ def _clean_chart_spec(spec: Dict[str, Any]) -> None:
                     colorbar = marker.get("colorbar")
                     if isinstance(colorbar, dict):
                         _clear_color_title_field(colorbar, "title")
+
+                if trace.get("type") == "scatter3d":
+                    # Convert 3D scatter to clean 2D scatter
+                    trace["type"] = "scatter"
+                    if "z" in trace:
+                        del trace["z"]
+                    m = trace.setdefault("marker", {})
+                    current_size = m.get("size")
+                    if current_size is None or (isinstance(current_size, (int, float)) and current_size > 7):
+                        m["size"] = 5.5
+                    if "opacity" not in m:
+                        m["opacity"] = 0.85
+                    if "line" in m:
+                        del m["line"]
+                elif trace.get("type") in ("scatter", "scattergl"):
+                    mode = str(trace.get("mode", ""))
+                    trace_name = str(trace.get("name", "")).lower()
+                    if "lines" in mode or "trendline" in trace_name or "ols" in trace_name:
+                        ln = trace.setdefault("line", {})
+                        ln["color"] = "#f97316"
+                        ln["width"] = max(int(ln.get("width", 0) or 0), 3)
+                        ln["dash"] = "solid"
+                    if "markers" in mode or not mode:
+                        m = trace.setdefault("marker", {})
+                        if not m.get("color") or m.get("color") in ("#636efa", "#1f77b4"):
+                            m["color"] = "#8b5cf6"
+                        m["opacity"] = m.get("opacity", 0.8)
+                elif trace.get("type") == "pie":
+                    trace.setdefault("hole", 0.4)
+
+    if isinstance(layout, dict):
+        layout["colorway"] = ["#8b5cf6", "#f97316", "#06b6d4", "#10b981", "#f59e0b", "#ec4899", "#6366f1", "#14b8a6"]
+        layout["paper_bgcolor"] = "rgba(0,0,0,0)"
+        layout["plot_bgcolor"] = "rgba(0,0,0,0)"
+        if "scene" in layout:
+            del layout["scene"]
+        if "shapes" in layout and isinstance(layout["shapes"], list):
+            for shape in layout["shapes"]:
+                if isinstance(shape, dict) and "line" in shape and isinstance(shape["line"], dict):
+                    shape["line"]["dash"] = "solid"
+
 
 
 class MLAgent:
@@ -242,6 +313,27 @@ class MLAgent:
         """
         loaded_dfs: Dict[str, pd.DataFrame] = {}
         executed_sql: Optional[str] = None
+
+        # 0. If given_id is provided, try loading from internal.generated_datasets
+        if given_id and self.engine:
+            try:
+                with self.engine.connect() as conn:
+                    ds_row = conn.execute(
+                        text("SELECT name, query, rows FROM internal.generated_datasets WHERE id = :id"),
+                        {"id": given_id},
+                    ).fetchone()
+                    if ds_row and ds_row[2]:
+                        raw_ds_rows = ds_row[2]
+                        if isinstance(raw_ds_rows, str):
+                            raw_ds_rows = json.loads(raw_ds_rows)
+                        if raw_ds_rows:
+                            df = pd.DataFrame(raw_ds_rows)
+                            clean_name = self._clean_identifier(ds_row[0] or "dataset")
+                            loaded_dfs["data"] = df
+                            loaded_dfs[f"data_{clean_name}"] = df
+                            executed_sql = ds_row[1]
+            except Exception as ds_err:
+                logger.warning(f"Could not load dataset {given_id} from internal.generated_datasets: {ds_err}")
 
         # 1. Normalize table_names
         resolved_tables: List[str] = []
@@ -589,22 +681,39 @@ class MLAgent:
 
             code = ""
             code_title = ""
-            try:
-                structured_model = self.chat_model.with_structured_output(MLCodeGenerationOutput)
-                result = await structured_model.ainvoke(messages, config=config)
-                if isinstance(result, dict):
-                    result = MLCodeGenerationOutput.model_validate(result)
+            for attempt in range(3):
+                try:
+                    structured_model = self.chat_model.with_structured_output(MLCodeGenerationOutput)
+                    result = await structured_model.ainvoke(messages, config=config)
+                    if isinstance(result, dict):
+                        result = MLCodeGenerationOutput.model_validate(result)
 
-                if isinstance(result, MLCodeGenerationOutput):
-                    code = self._extract_python_code(result.code)
-                    code_title = truncate_words(result.code_title.strip(), max_words=5)
-            except Exception as ex:
-                logger.warning(f"Structured ML code generation failed ({ex}), falling back to direct invoke")
+                    if isinstance(result, MLCodeGenerationOutput):
+                        code = self._extract_python_code(result.code)
+                        code_title = truncate_words(result.code_title.strip(), max_words=5)
+                    break
+                except Exception as ex:
+                    err_str = str(ex)
+                    if attempt < 2 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                        await asyncio.sleep(2.0 * (attempt + 1))
+                        continue
+                    logger.warning(f"Structured ML code generation failed ({ex}), falling back to direct invoke")
+                    break
 
             if not code:
-                resp = await self.chat_model.ainvoke(messages, config=config)
-                content = extract_text_from_message_content(resp.content)
-                code = self._extract_python_code(content)
+                for attempt in range(3):
+                    try:
+                        resp = await self.chat_model.ainvoke(messages, config=config)
+                        content = extract_text_from_message_content(resp.content)
+                        code = self._extract_python_code(content)
+                        break
+                    except Exception as fb_err:
+                        err_str = str(fb_err)
+                        if attempt < 2 and any(token in err_str for token in ("503", "429", "UNAVAILABLE", "ResourceExhausted", "high demand")):
+                            await asyncio.sleep(2.0 * (attempt + 1))
+                            continue
+                        logger.error(f"Fallback invoke failed: {fb_err}")
+                        break
 
             if not code_title:
                 task_words = "".join(c for c in task_desc if c.isalnum() or c.isspace()).split()
@@ -788,6 +897,7 @@ class MLAgent:
 
             resp = await self.chat_model.ainvoke(messages, config=config)
             summary_text = extract_text_from_message_content(resp.content)
+            summary_text = strip_filenames_from_text(summary_text)
 
             sum_span.update(
                 output={"response": summary_text},
@@ -848,7 +958,15 @@ class MLAgent:
             if isinstance(spec, dict) and "data" in spec and isinstance(spec["data"], list) and len(spec["data"]) > 0:
                 first_trace = spec["data"][0]
                 if isinstance(first_trace, dict):
-                    chart_type = first_trace.get("type", "plotly")
+                    raw_type = first_trace.get("type", "plotly")
+                    mode = str(first_trace.get("mode", ""))
+                    if raw_type == "scatter":
+                        if "lines" in mode:
+                            chart_type = "line"
+                        else:
+                            chart_type = "scatter"
+                    else:
+                        chart_type = raw_type
 
             try:
                 with self.engine.begin() as conn:

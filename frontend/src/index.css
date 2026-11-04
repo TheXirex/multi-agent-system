@@ -143,22 +143,26 @@ input:focus, textarea:focus, select:focus {
 .badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: var(--app-radius);
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   background-color: var(--mono-700);
   color: var(--mono-300);
-  border: 1px solid rgba(108, 117, 125, 0.5);
+  border: 1px solid var(--mono-600);
   white-space: nowrap;
+  box-sizing: border-box;
+  line-height: 1;
 }
 
 .badge-light {
   background-color: var(--mono-600);
   color: var(--mono-50);
-  padding: 2px 6px;
+  border: 1px solid var(--mono-600);
 }
 
 .spinner {
@@ -396,8 +400,8 @@ input:focus, textarea:focus, select:focus {
 .welcome-card,
 .assistant-card {
   width: 100%;
-  background-color: rgba(52, 58, 64, 0.8);
-  border: 1px solid rgba(73, 80, 87, 0.7);
+  background-color: var(--mono-700);
+  border: 1px solid var(--mono-600);
   border-radius: var(--app-radius);
   padding: 14px;
   display: flex;
@@ -594,7 +598,7 @@ input:focus, textarea:focus, select:focus {
   width: 100%;
   max-width: 100%;
   background-color: var(--mono-800);
-  border: 1px solid rgba(73, 80, 87, 0.7);
+  border: 1px solid var(--mono-600);
   border-radius: var(--app-radius);
   overflow: hidden;
   display: flex;
@@ -612,7 +616,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .widget-header.expanded {
-  border-bottom: 1px solid rgba(73, 80, 87, 0.6);
+  border-bottom: 1px solid var(--mono-600);
 }
 
 .widget-header.collapsible {
@@ -620,7 +624,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .widget-header.collapsible:hover {
-  background-color: #2b3035;
+  background-color: var(--mono-700);
 }
 
 .widget-title-group {
@@ -649,20 +653,34 @@ input:focus, textarea:focus, select:focus {
   flex-shrink: 0;
 }
 
+.widget-actions .badge {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
 .widget-copy-btn {
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
   color: var(--mono-400);
   background: var(--mono-700);
-  border: 1px solid rgba(108, 117, 125, 0.4);
+  border: 1px solid var(--mono-600);
   border-radius: 4px;
   font-size: 11px;
   gap: 4px;
+  box-sizing: border-box;
+  line-height: 1;
 }
 
 .widget-copy-btn:hover:not(:disabled),
 .widget-copy-btn.copied {
   border-color: var(--mono-300);
   color: var(--mono-50);
+  background: var(--mono-600);
 }
 
 .widget-chevron {
@@ -676,7 +694,7 @@ input:focus, textarea:focus, select:focus {
 .code-pre {
   margin: 0;
   padding: 12px 14px;
-  background: #181a1d;
+  background-color: var(--mono-800);
   border-radius: 0;
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -687,7 +705,7 @@ input:focus, textarea:focus, select:focus {
 .workspace-header {
   width: 100%;
   padding: 6px 10px;
-  border-bottom: 1px solid rgba(73, 80, 87, 0.6);
+  border-bottom: 1px solid var(--mono-600);
   background-color: var(--mono-800);
   display: flex;
   align-items: center;
@@ -801,14 +819,14 @@ input:focus, textarea:focus, select:focus {
   flex-direction: column;
   height: 100%;
   background-color: var(--mono-800);
-  border: 1px solid rgba(73, 80, 87, 0.6);
+  border: 1px solid var(--mono-600);
   border-radius: var(--app-radius);
   overflow: hidden;
 }
 
 .table-toolbar {
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(73, 80, 87, 0.6);
+  border-bottom: 1px solid var(--mono-600);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -821,8 +839,10 @@ input:focus, textarea:focus, select:focus {
   gap: 5px;
   background-color: var(--mono-700);
   border: 1px solid var(--mono-600);
-  border-radius: var(--app-radius);
-  padding: 2px 6px;
+  border-radius: 4px;
+  padding: 0 6px;
+  height: 22px;
+  box-sizing: border-box;
   max-width: 125px;
 }
 
@@ -850,7 +870,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .data-table thead tr {
-  background-color: #1c1f23;
+  background-color: var(--mono-800);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -866,7 +886,7 @@ input:focus, textarea:focus, select:focus {
 }
 
 .data-table tbody tr {
-  border-bottom: 1px solid rgba(73, 80, 87, 0.4);
+  border-bottom: 1px solid var(--mono-600);
 }
 
 .data-table tbody tr:nth-child(odd) {
@@ -884,7 +904,7 @@ input:focus, textarea:focus, select:focus {
 
 .table-pagination {
   padding: 6px 12px;
-  border-top: 1px solid rgba(73, 80, 87, 0.6);
+  border-top: 1px solid var(--mono-600);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -898,11 +918,24 @@ input:focus, textarea:focus, select:focus {
 }
 
 .page-btn {
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  padding: 0 8px;
   background: var(--mono-700);
   border: 1px solid var(--mono-600);
+  border-radius: 4px;
   color: var(--mono-50);
   font-size: 11px;
+  gap: 4px;
+  box-sizing: border-box;
+  line-height: 1;
+}
+
+.page-btn:hover:not(:disabled) {
+  background: var(--mono-600);
+  border-color: var(--mono-300);
 }
 
 /* Modals (FileAttachModal & Delete Session Modal) */
@@ -933,7 +966,7 @@ input:focus, textarea:focus, select:focus {
 
 .modal-header {
   padding: 12px 16px;
-  border-bottom: 1px solid rgba(73, 80, 87, 0.6);
+  border-bottom: 1px solid var(--mono-600);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -958,8 +991,8 @@ input:focus, textarea:focus, select:focus {
 
 .modal-footer {
   padding: 10px 16px;
-  border-top: 1px solid rgba(73, 80, 87, 0.6);
-  background-color: #1c1f23;
+  border-top: 1px solid var(--mono-600);
+  background-color: var(--mono-800);
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -993,7 +1026,7 @@ input:focus, textarea:focus, select:focus {
 
 .dropzone {
   border: 2px dashed var(--mono-600);
-  background-color: #181a1d;
+  background-color: var(--mono-800);
   border-radius: var(--app-radius);
   padding: 22px 16px;
   display: flex;
@@ -1015,7 +1048,7 @@ input:focus, textarea:focus, select:focus {
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  background-color: #2b3035;
+  background-color: var(--mono-700);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1036,7 +1069,7 @@ input:focus, textarea:focus, select:focus {
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  background-color: #181a1d;
+  background-color: var(--mono-800);
   border: 1px solid var(--mono-600);
   border-radius: var(--app-radius);
 }
@@ -1138,6 +1171,8 @@ input:focus, textarea:focus, select:focus {
 /* Syntax Highlighting for Prism (Monochrome Dark) */
 code[class*="language-"],
 pre[class*="language-"] {
+  background: transparent !important;
+  background-color: transparent !important;
   color: var(--mono-100);
   font-family: var(--font-mono);
   font-size: 12px;

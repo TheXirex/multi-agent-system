@@ -4,7 +4,9 @@ CREATE TABLE IF NOT EXISTS categories (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) UNIQUE NOT NULL,
     main_category VARCHAR(100) NOT NULL,
-    sub_category VARCHAR(100) NOT NULL
+    sub_category VARCHAR(100) NOT NULL,
+    leaf_category VARCHAR(100) NOT NULL,
+    category_path VARCHAR(255) UNIQUE NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS products (
@@ -13,39 +15,41 @@ CREATE TABLE IF NOT EXISTS products (
     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     discounted_price NUMERIC(10, 2) NOT NULL,
     actual_price NUMERIC(10, 2) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'USD',
     discount_percentage NUMERIC(5, 2) NOT NULL,
     rating NUMERIC(3, 2) NOT NULL,
     rating_count INTEGER NOT NULL DEFAULT 0,
     about_product TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS users (
     id VARCHAR(100) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     order_id VARCHAR(100) UNIQUE NOT NULL,
-    user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
-    product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
+    user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    product_id VARCHAR(50) NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     unit_price NUMERIC(10, 2) NOT NULL,
     quantity INTEGER NOT NULL DEFAULT 1,
     total_amount NUMERIC(10, 2) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'USD',
     status VARCHAR(50) NOT NULL DEFAULT 'Delivered',
-    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS product_reviews (
     id VARCHAR(100) PRIMARY KEY,
-    product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
-    user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+    product_id VARCHAR(50) NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     rating NUMERIC(3, 2) NOT NULL,
     review_title TEXT,
     review_content TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_products_category_id ON products(category_id);
@@ -80,6 +84,18 @@ CREATE TABLE IF NOT EXISTS internal.generated_scripts (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_generated_scripts_session_id ON internal.generated_scripts(session_id);
+
+CREATE TABLE IF NOT EXISTS internal.generated_datasets (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    query TEXT,
+    columns JSONB NOT NULL,
+    rows JSONB NOT NULL,
+    row_count INTEGER NOT NULL,
+    session_id VARCHAR(36),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_generated_datasets_session_id ON internal.generated_datasets(session_id);
 
 CREATE TABLE IF NOT EXISTS internal.chat_sessions (
     id VARCHAR(36) PRIMARY KEY,

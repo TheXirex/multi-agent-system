@@ -24,6 +24,7 @@ TRACKED_METADATA_KEYS: Tuple[str, ...] = (
     "change_id",
     "reverted_change_id",
     "schema_tables",
+    "schema_mismatch",
     "action",
     "row_count",
 )

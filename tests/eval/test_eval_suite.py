@@ -49,7 +49,7 @@ def test_evaluation_scenario(
         turn_id = turn["turn_id"]
         action = turn.get("action", "query")
         if action == "upload":
-            actual = eval_runner.execute_upload(session_id, turn["file_path"])
+            actual = eval_runner.execute_upload(session_id, turn["file_path"], user_query=turn.get("user_query"))
         else:
             actual = eval_runner.execute_turn(session_id, turn["user_query"])
         eval_res = eval_runner.evaluate_turn(turn, actual)

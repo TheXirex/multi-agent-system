@@ -193,13 +193,27 @@ def resolve_tool_arguments(
             + str(step_args.get("user_input") or "")
         ).lower()
         desc_words = set("".join(c if c.isalnum() else " " for c in task_desc).split())
-        known_tables = ["product_reviews", "products", "orders", "categories", "users"]
+        known_tables: list[str] = []
+        if active_meta.get("schema_tables"):
+            for st in active_meta["schema_tables"]:
+                if st not in known_tables:
+                    known_tables.append(st)
+        if active_meta.get("uploaded_tables"):
+            for ut in active_meta["uploaded_tables"]:
+                if ut not in known_tables:
+                    known_tables.append(ut)
+        if active_meta.get("table_names"):
+            tns = active_meta["table_names"]
+            if isinstance(tns, str):
+                tns = [tns]
+            for tn in tns:
+                if tn not in known_tables:
+                    known_tables.append(tn)
         detected_tables = []
+        known_tables.sort(key=len, reverse=True)
         for t in known_tables:
             singular = t[:-1] if t.endswith("s") else t
-            if t in desc_words or singular in desc_words or (t == "product_reviews" and "reviews" in desc_words):
-                if t == "products" and "product_reviews" in detected_tables:
-                    continue
+            if t in desc_words or singular in desc_words:
                 detected_tables.append(t)
 
         if detected_tables:

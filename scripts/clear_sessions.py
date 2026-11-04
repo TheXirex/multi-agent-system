@@ -21,6 +21,7 @@ def clear_all_sessions(db_url: Optional[str] = None) -> None:
         "internal.change_history",
         "internal.generated_charts",
         "internal.generated_scripts",
+        "internal.generated_datasets",
         "internal.chat_messages",
         "internal.chat_sessions",
     ]

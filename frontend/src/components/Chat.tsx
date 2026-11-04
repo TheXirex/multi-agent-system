@@ -71,7 +71,7 @@ export const Chat: React.FC<ChatProps> = ({
 
   const handleSubmit = async () => {
     const text = inputText.trim();
-    if ((!text && !pendingFile) || isBusy) return;
+    if (!text || isBusy) return;
 
     const fileToSend = pendingFile;
     setInputText('');
@@ -262,7 +262,7 @@ export const Chat: React.FC<ChatProps> = ({
 
           <button
             onClick={handleSubmit}
-            disabled={isBusy || (!inputText.trim() && !pendingFile)}
+            disabled={isBusy || !inputText.trim()}
             className="btn-send"
           >
             <Send size={15} />

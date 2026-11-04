@@ -1,10 +1,3 @@
-"""
-Dataset Loader.
-Downloads dataset via kagglehub,
-loads the CSV strictly into memory without storing it locally,
-cleans, normalizes, and sanitizes data into relational tables,
-and seeds the baseline PostgreSQL public schema.
-"""
 import argparse
 import io
 import logging
@@ -22,6 +15,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("data_loader")
 
 DATASET_SLUG = "karkavelrajaj/amazon-sales-dataset"
+INR_TO_USD_RATE: float = float(os.getenv("INR_TO_USD_RATE", "0.012"))
+DEFAULT_CURRENCY: str = "USD"
 
 
 def get_default_database_url() -> str:
@@ -86,14 +81,32 @@ def _humanize_category_segment(segment: Any) -> str:
     return " ".join("".join(chars).split())
 
 
-def _clean_price(value: Any) -> float:
-    if pd.isna(value):
-        return 0.0
-    cleaned = str(value).replace("₹", "").replace(",", "").replace(" ", "").strip()
+def _clean_price_and_currency(value: Any, default_currency: str = DEFAULT_CURRENCY) -> Tuple[float, str]:
+    if pd.isna(value) or value is None:
+        return 0.0, default_currency
+    text_val = str(value).strip()
+    is_inr = "₹" in text_val or "INR" in text_val
+    cleaned = (
+        text_val.replace("₹", "")
+        .replace("$", "")
+        .replace("INR", "")
+        .replace("USD", "")
+        .replace(",", "")
+        .replace(" ", "")
+        .strip()
+    )
     try:
-        return round(float(cleaned), 2)
+        val = float(cleaned)
+        if is_inr:
+            val = val * INR_TO_USD_RATE
+        return round(val, 2), "USD"
     except (ValueError, TypeError):
-        return 0.0
+        return 0.0, default_currency
+
+
+def _clean_price(value: Any) -> float:
+    price, _ = _clean_price_and_currency(value)
+    return price
 
 
 def _clean_discount_percentage(value: Any) -> float:
@@ -241,8 +254,8 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
 
         cat_id = category_map.get(str(row.get("category", "")))
         p_name = _sanitize_text(row.get("product_name", "")) or "Product"
-        d_price = _clean_price(row.get("discounted_price"))
-        a_price = _clean_price(row.get("actual_price"))
+        d_price, curr = _clean_price_and_currency(row.get("discounted_price"))
+        a_price, _ = _clean_price_and_currency(row.get("actual_price"))
         if a_price < d_price:
             a_price = d_price
 
@@ -257,6 +270,7 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
             "category_id": cat_id,
             "discounted_price": d_price,
             "actual_price": a_price,
+            "currency": curr,
             "discount_percentage": pct,
             "rating": rating_val,
             "rating_count": rating_cnt,
@@ -336,6 +350,7 @@ def transform_data(raw_df: pd.DataFrame) -> Tuple[
                 "unit_price": p_price,
                 "quantity": 1,
                 "total_amount": p_price,
+                "currency": "USD",
                 "status": order_status,
                 "order_date": order_dt,
             })
@@ -357,11 +372,11 @@ def create_schema_tables(conn: Any) -> None:
     conn.execute(text("""
         CREATE TABLE IF NOT EXISTS categories (
             id SERIAL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
+            name VARCHAR(255) UNIQUE NOT NULL,
             main_category VARCHAR(100) NOT NULL,
             sub_category VARCHAR(100) NOT NULL,
             leaf_category VARCHAR(100) NOT NULL,
-            category_path VARCHAR(255) NOT NULL
+            category_path VARCHAR(255) UNIQUE NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS products (
@@ -370,39 +385,41 @@ def create_schema_tables(conn: Any) -> None:
             category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
             discounted_price NUMERIC(10, 2) NOT NULL,
             actual_price NUMERIC(10, 2) NOT NULL,
+            currency VARCHAR(10) NOT NULL DEFAULT 'USD',
             discount_percentage NUMERIC(5, 2) NOT NULL,
             rating NUMERIC(3, 2) NOT NULL,
             rating_count INTEGER NOT NULL DEFAULT 0,
             about_product TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS users (
             id VARCHAR(100) PRIMARY KEY,
             name VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS orders (
             id SERIAL PRIMARY KEY,
             order_id VARCHAR(100) UNIQUE NOT NULL,
-            user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
-            product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
+            user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            product_id VARCHAR(50) NOT NULL REFERENCES products(id) ON DELETE CASCADE,
             unit_price NUMERIC(10, 2) NOT NULL,
             quantity INTEGER NOT NULL DEFAULT 1,
             total_amount NUMERIC(10, 2) NOT NULL,
+            currency VARCHAR(10) NOT NULL DEFAULT 'USD',
             status VARCHAR(50) NOT NULL DEFAULT 'Delivered',
-            order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS product_reviews (
             id VARCHAR(100) PRIMARY KEY,
-            product_id VARCHAR(50) REFERENCES products(id) ON DELETE CASCADE,
-            user_id VARCHAR(100) REFERENCES users(id) ON DELETE CASCADE,
+            product_id VARCHAR(50) NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            user_id VARCHAR(100) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             rating NUMERIC(3, 2) NOT NULL,
             review_title TEXT,
             review_content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_categories_main_category ON categories(main_category);
@@ -494,8 +511,8 @@ def seed_database(engine: Engine, reset: bool = False) -> None:
             chunk = products_data[i : i + chunk_size]
             conn.execute(
                 text("""
-                    INSERT INTO products (id, name, category_id, discounted_price, actual_price, discount_percentage, rating, rating_count, about_product)
-                    VALUES (:id, :name, :category_id, :discounted_price, :actual_price, :discount_percentage, :rating, :rating_count, :about_product)
+                    INSERT INTO products (id, name, category_id, discounted_price, actual_price, currency, discount_percentage, rating, rating_count, about_product)
+                    VALUES (:id, :name, :category_id, :discounted_price, :actual_price, :currency, :discount_percentage, :rating, :rating_count, :about_product)
                     ON CONFLICT (id) DO NOTHING;
                 """),
                 chunk,
@@ -518,8 +535,8 @@ def seed_database(engine: Engine, reset: bool = False) -> None:
             chunk = orders_data[i : i + chunk_size]
             conn.execute(
                 text("""
-                    INSERT INTO orders (order_id, user_id, product_id, unit_price, quantity, total_amount, status, order_date)
-                    VALUES (:order_id, :user_id, :product_id, :unit_price, :quantity, :total_amount, :status, :order_date)
+                    INSERT INTO orders (order_id, user_id, product_id, unit_price, quantity, total_amount, currency, status, order_date)
+                    VALUES (:order_id, :user_id, :product_id, :unit_price, :quantity, :total_amount, :currency, :status, :order_date)
                     ON CONFLICT (order_id) DO NOTHING;
                 """),
                 chunk,

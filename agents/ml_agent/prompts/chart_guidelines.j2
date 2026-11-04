@@ -1,43 +1,74 @@
 Visualizations and Chart Selection:
 - Use Plotly for interactive figures (import plotly.express as px or import plotly.graph_objects as go).
 - Keep each visualization as an independent, standalone figure. Avoid subplots, grids, or make_subplots.
-- Save each figure to its own separate JSON file (for example: fig.write_json('top_products_by_revenue.json')).
-- Chart titles: Provide a concise title (4–5 words maximum, e.g., 'Top Products by Revenue' or 'Customer Age Distribution').
+- Save each figure to its own separate JSON file (for example: fig.write_json('chart_1.json')). When the user requests multiple visualizations (such as two charts), create and save each figure independently to its own distinct JSON file (e.g., fig1.write_json('chart_1.json') and fig2.write_json('chart_2.json')).
+- Chart titles: Provide a concise title (4–5 words maximum, e.g., 'Primary Metric Distribution' or 'Metric by Group').
 
 Chart Type Selection Guidelines:
-1. Categorical Comparisons and Rankings (Top-N items, categories, counts, aggregates):
-   - When category labels are long (>10 characters) or when comparing more than 5 items:
-     Use Horizontal Bar Chart (px.bar(..., orientation='h')).
-     Sort values ascending so the highest-ranking item appears at the top: df = df.sort_values(by=metric, ascending=True).
-     Filter to the top 10–15 items (e.g. df.tail(10)) to keep bars legible and well-spaced.
-   - When comparing few categories (up to 5) with short names:
-     Use Vertical Bar Chart (px.bar(...)), sorted descending.
-   - For all bar charts, define clear borders and spacing between bars:
-     fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.2)
-     fig.update_layout(bargap=0.15)
-2. Trends Over Time and Continuous Progressions:
-   - Use Line Chart (px.line(..., markers=True)).
-   - Reserve bar and pie charts for discrete categorical comparisons rather than continuous temporal trends.
+1. Categorical Breakdown, Proportions, and Rankings:
+   - Pie Charts & Donut Charts (px.pie):
+     * Use Pie or Donut Charts (`px.pie(df, names='category_col', values='metric_col')` or `px.pie(df, names='category_col', hole=0.4)`) for categorical distributions, status breakdowns, shares, and composition.
+     * Pie charts are recommended when showing distribution across 2 to 7 groups to clearly convey proportions of the whole.
+     * Example: `fig = px.pie(df_grouped, names='category_col', values='count_col', hole=0.4, color_discrete_sequence=['#8b5cf6', '#f97316', '#06b6d4', '#10b981', '#f59e0b'])`
+   - Bar Charts (px.bar):
+     * When comparing more than 7 groups or when ranking Top-N items, use a Horizontal Bar Chart (`px.bar(..., orientation='h')`).
+     * Sort values ascending so the highest-ranking item appears at the top: `df = df.sort_values(by=metric_col, ascending=True).tail(10)`.
+     * For all bar charts, define distinct edges and spacing between bars:
+       `fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.2)`
+       `fig.update_layout(bargap=0.15)`
+2. Temporal Dynamics, Periodic Trends, and Time Series:
+   - Autonomous Period Grouping:
+     * When the data spans across a year or several months, autonomously add grouping and aggregate records by calendar period (month, week, or quarter) rather than plotting raw unaggregated individual transaction timestamps.
+     * For multi-month or annual trends: group by month (`df['period'] = pd.to_datetime(df[date_col]).dt.to_period('M').astype(str)`, then `df_trend = df.groupby('period')[metric_col].sum().reset_index()`).
+     * For shorter spans: group by week (`df['period'] = pd.to_datetime(df[date_col]).dt.to_period('W').astype(str)`).
+     * Plotting raw individual records across a year creates an unreadable, noisy zig-zag of vertical spikes. Autonomous aggregation produces smooth, meaningful business trendlines.
+   - Chart Selection & Styling for Temporal Trends:
+     * When generating a line chart for trends over time:
+       Use a clean Line Chart without individual point markers (`px.line(df_trend, x='period', y=metric_col, markers=False)` or omit `markers`).
+       Avoid point markers (`markers=True`) on continuous timelines, because point markers create visual clutter and render as a dense swarm of circular dots.
+     * When comparing metrics across distinct discrete periods without an explicit instruction for a line chart:
+       Use a Vertical Bar Chart (`px.bar(...)`) or an Area Chart (`px.area(...)`).
 3. Distribution of a Single Metric:
    - Use a clean Histogram without marginal box plots or outlier fence points (px.histogram(df, x=metric, nbins=25)). Omit marginal box plots so that lower and upper fence markers and outlier points do not clutter the distribution.
-   - Histogram Bins and Borders:
-     Separate adjacent bins with distinct borders and a layout gap so they remain individually visible and avoid blending into a continuous solid blob:
+   - Histogram Bins and Separation:
+     Separate adjacent bins with distinct outlines and a layout gap so they remain individually visible and avoid blending into a continuous solid blob:
      fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.5, selector=dict(type='histogram'))
      fig.update_layout(bargap=0.08)
    - For comparing distributions across 2–5 groups, use Box Plot (px.box(..., points=False)) omitting individual outlier fence points.
-4. Correlation and Relationship Between Two Continuous Variables:
-   - Use Scatter Plot with a prominent OLS trendline:
-     fig = px.scatter(df, x=var_x, y=var_y, opacity=0.7, trendline='ols', trendline_color_override='#EF553B')
-     fig.update_traces(line=dict(width=3), selector=dict(mode='lines'))
-   - Regression Line Styling:
-     Display the regression line with a thick stroke (width=3) and an eye-catching, distinct color (such as '#EF553B' or '#FF6692') that sharply contrasts with the scatter points.
+4. Categorical vs Numeric Data and Correlation:
+   - Categorical vs Continuous Numeric Data:
+     * When one axis represents categorical values, discrete text labels, or binned groups and the other axis represents a continuous numeric metric:
+       Do NOT use a Scatter Plot (px.scatter), because plotting scatter points against a discrete axis creates unreadable vertical stripes of stacked dots.
+       Instead, choose:
+       - Pie Chart (`px.pie(...)`) or Donut Chart for proportions and breakdowns.
+       - Box Plot (`px.box(df, x=cat_col, y=num_col)`) or Violin Plot to show distribution across groups.
+       - Bar Chart (`px.bar(...)`) or Horizontal Bar Chart for aggregated metrics.
+   - Continuous vs Continuous Correlation & Regression Trendlines:
+     * Reserve Scatter Plots (`px.scatter`) strictly for relationships between two continuous numeric variables.
+     * Strict Line Rule for Scatter Plots:
+       - Any line on a scatter plot must strictly represent a regression trendline (`trendline='ols'`).
+       - Never use dashed, dotted, or arbitrary reference lines (do NOT add diagonal dashed `y = x` identity lines or threshold lines).
+       - Trendlines must be drawn as solid bright orange lines: `trendline='ols'`, `trendline_color_override='#f97316'`.
+       - Line styling for trendlines must always be solid (`line=dict(color='#f97316', width=3.5, dash='solid')`).
+     * Scatter Points Styling:
+       Use purple points (`color_discrete_sequence=['#8b5cf6']`).
+       `fig = px.scatter(df, x=var_x, y=var_y, opacity=0.75, trendline='ols', trendline_color_override='#f97316', color_discrete_sequence=['#8b5cf6'])`
+       `fig.update_traces(line=dict(color='#f97316', width=3.5, dash='solid'), selector=dict(mode='lines'))`
 5. Multi-Feature Correlation Matrix:
    - Use Heatmap (px.imshow(df.corr(numeric_only=True), text_auto='.2f', color_continuous_scale='RdBu_r', zmin=-1, zmax=1)).
 6. Composition and Proportions of a Whole:
-   - Use Donut Chart (px.pie(..., hole=0.45)) only when total categories do not exceed 5 and values are strictly positive.
-   - When categories exceed 5, group minor categories into 'Other' or use a Horizontal Bar Chart. Avoid pie charts for more than 6 categories or negative values.
+   - Use Pie Chart or Donut Chart (`px.pie(df, names=category_col, values=metric_col, hole=0.45)`) for breakdowns and proportions.
+   - When groups exceed 7, group smaller slices into 'Other' or use a Horizontal Bar Chart.
 7. Clustering and Segmentation:
-   - Choose a visualization that makes the clusters intuitive to interpret, such as a Scatter Plot comparing key domain features colored by cluster (px.scatter(df, x=primary_feature, y=secondary_feature, color=df['cluster'].astype(str))), a Scatter Matrix, or other multi-variable views.
+   - Strict 2D Visualization Policy:
+     * Always visualize clusters and multidimensional segmentation using clean 2D figures.
+     * Do NOT generate 3D plots (`px.scatter_3d` or `go.Scatter3d`). 3D projections obscure labels, distort relative spatial distances, and complicate axis interpretation.
+     * For 2D cluster comparison:
+       Select the two most informative numeric features (e.g., `feature_x` vs `feature_y`) and color by cluster:
+       `fig = px.scatter(df, x=feature_x, y=feature_y, color=df['cluster'].astype(str), color_discrete_sequence=['#8b5cf6', '#f97316', '#06b6d4', '#10b981'])`
+     * For multidimensional clustering (3+ features):
+       Use PCA to project features onto 2 principal components (`PC1` vs `PC2`), or plot the two most prominent features in 2D.
+     * Use purple points and high-contrast cluster colors from the palette. Ensure all clusters are visualized in 2D.
 
 Typography, Sizing, and Layout Styling:
 - Global Font Size: Constrain font sizing in layout to maintain balanced proportions:
@@ -46,7 +77,7 @@ Typography, Sizing, and Layout Styling:
   fig.update_xaxes(title_font_size=12, tickfont_size=10)
   fig.update_yaxes(title_font_size=12, tickfont_size=10)
 - Bar and Histogram Outlines:
-  Configure clear borders and gutters on bar and histogram traces so bars do not fuse together:
+  Configure clear outlines and gutters on bar and histogram traces so bars do not fuse together:
   fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.5, selector=dict(type='histogram'))
   fig.update_traces(marker_line_color='#0f172a', marker_line_width=1.2, selector=dict(type='bar'))
 - On-Chart Data Labels:
@@ -56,7 +87,7 @@ Typography, Sizing, and Layout Styling:
   Format hover tooltips to be concise and minimal. Remove redundant secondary legend/trace boxes and column name prefixes:
   * Box Plots and Quartiles: Display clean quartile notations without legend clutter by using native hoverinfo:
     fig.update_traces(hovertemplate=None, hoverinfo='y', selector=dict(type='box'))
-    (or hoverinfo='x+y' when comparing categories across the x-axis). This natively outputs max, q3, median, q1, min without legend boxes or repetitive column labels.
+    (or hoverinfo='x+y' when comparing groups across the x-axis). This natively outputs max, q3, median, q1, min without legend boxes or repetitive column labels.
   * Bar Charts and Categorical Aggregations: Keep hover clean (label: value) using `<extra></extra>` to omit secondary legend boxes:
     For horizontal bar: fig.update_traces(hovertemplate='%{y}: %{x}<extra></extra>', selector=dict(type='bar'))
     For vertical bar: fig.update_traces(hovertemplate='%{x}: %{y}<extra></extra>', selector=dict(type='bar'))
@@ -64,10 +95,12 @@ Typography, Sizing, and Layout Styling:
     fig.update_traces(hovertemplate='%{x}: %{y}<extra></extra>', selector=dict(type='histogram'))
 - Long Label Truncation:
   When categorical labels exceed 25 characters, truncate them in pandas:
-  df['display_name'] = df['name'].apply(lambda x: str(x)[:25] + '...' if len(str(x)) > 25 else str(x))
+  df['display_label'] = df[label_col].apply(lambda x: str(x)[:25] + '...' if len(str(x)) > 25 else str(x))
 - Margins: Ensure adequate margin for labels:
   fig.update_layout(margin=dict(l=100, r=30, t=50, b=50))
 - Legend and Colorbars:
-  Give meaningful legend titles (such as 'Category', 'Cluster', 'Tier') or omit via fig.update_layout(legend_title_text=''). Avoid raw default variable names like 'color'.
-- Visual Theme:
-  Use template="plotly_dark", clean transparent backgrounds (paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), and distinct color palettes (color_discrete_sequence=px.colors.qualitative.Plotly or px.colors.qualitative.Safe).
+  Give meaningful legend titles (such as 'Group', 'Cluster', 'Tier') or omit via fig.update_layout(legend_title_text=''). Avoid raw default variable names like 'color'.
+- Visual Theme & Color Palette:
+  Use template="plotly_dark", clean transparent backgrounds (paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)'), and modern high-contrast color palettes:
+  color_discrete_sequence=['#8b5cf6', '#f97316', '#06b6d4', '#10b981', '#f59e0b', '#ec4899', '#6366f1', '#14b8a6']
+  (Points should be purple `#8b5cf6`, lines should be bright orange `#f97316`; avoid default basic blue `#636efa` and basic red `#EF553B`).

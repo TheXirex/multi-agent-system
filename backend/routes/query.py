@@ -62,6 +62,10 @@ def _load_session_history(
         meta_val = parse_json_metadata(row[2])
         if meta_val.get("table_names"):
             active_metadata["table_names"] = meta_val["table_names"]
+        if meta_val.get("uploaded_tables"):
+            active_metadata["uploaded_tables"] = meta_val["uploaded_tables"]
+        if meta_val.get("uploaded_file"):
+            active_metadata["uploaded_file"] = meta_val["uploaded_file"]
         if meta_val.get("dataset_id"):
             active_metadata["dataset_id"] = meta_val["dataset_id"]
         if meta_val.get("dataset_ids"):
@@ -85,8 +89,19 @@ def _prepare_query_context(request: QueryRequest) -> Dict[str, Any]:
 
     history, active_metadata = _load_session_history(engine, session_id)
     active_metadata["session_id"] = session_id
+    if request.uploaded_tables:
+        active_metadata["uploaded_tables"] = request.uploaded_tables
+        active_metadata["table_names"] = request.uploaded_tables
+    if request.uploaded_file:
+        active_metadata["uploaded_file"] = request.uploaded_file
 
-    save_chat_message(engine, session_id, "user", effective_query)
+    user_meta: Dict[str, Any] = {}
+    if request.uploaded_tables:
+        user_meta["uploaded_tables"] = request.uploaded_tables
+    if request.uploaded_file:
+        user_meta["uploaded_file"] = request.uploaded_file
+
+    save_chat_message(engine, session_id, "user", effective_query, user_meta)
 
     return {
         "engine": engine,

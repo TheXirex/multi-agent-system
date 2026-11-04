@@ -297,6 +297,21 @@ class ModifyDatabaseTableTool(BaseTool):
                     except Exception:
                         pass
 
+                # For DELETE with RETURNING *, capture returned rows and build rollback statement
+                if plan.action_type == "delete" and result.returns_rows and not before_state:
+                    try:
+                        fetched = result.fetchall()
+                        before_state = [dict(r._mapping) for r in fetched]
+                        if before_state and not rollback_sql:
+                            rollback_sql = self._build_dml_rollback_sql(
+                                schema_name=target_schema,
+                                table_name=resolved_table,
+                                action_type="delete",
+                                before_state=before_state,
+                            )
+                    except Exception:
+                        pass
+
                 # If CREATE TABLE, rollback is DROP TABLE
                 if plan.action_type == "create_table" and resolved_table and not rollback_sql:
                     rollback_sql = f'DROP TABLE IF EXISTS "{resolved_table}" CASCADE;'
@@ -492,6 +507,9 @@ class ModifyDatabaseTableTool(BaseTool):
             pos = idx + 5
 
         where_clause = sql_statement[where_idx + 5:].strip().rstrip(";") if where_idx != -1 else ""
+        ret_idx = where_clause.lower().rfind("returning")
+        if ret_idx != -1:
+            where_clause = where_clause[:ret_idx].strip()
 
         if not where_clause and action_type in ("update", "delete"):
             return [], {
@@ -511,8 +529,9 @@ class ModifyDatabaseTableTool(BaseTool):
                 rows = conn.execute(text(query)).fetchall()
                 records = [dict(r._mapping) for r in rows]
 
-                # Check for multiple candidates on singular delete intent
-                if action_type == "delete" and len(records) > 1 and "limit" not in sql_statement.lower():
+                # Check for multiple candidates on singular delete intent (skip if explicit IN list or LIMIT used)
+                is_explicit_in = " in (" in sql_statement.lower() or " in(" in sql_statement.lower()
+                if action_type == "delete" and len(records) > 1 and "limit" not in sql_statement.lower() and not is_explicit_in:
                     target_val = "specified criterion"
                     if "=" in where_clause:
                         after_eq = where_clause.split("=", 1)[1].strip()
